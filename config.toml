@@ -1,0 +1,39 @@
+[[scripts]]
+  name = "bluetooth"
+  path = "scripts/dmenu-bluetooth"
+  preview = 2
+
+[[scripts]]
+  name = "pulse"
+  path = "scripts/dmenu-pulse"
+  preview = 2
+
+[[scripts]]
+  name = "package"
+  path = "scripts/dmenu-package"
+  preview = 3
+
+[[scripts]]
+  name = "bw"
+  path = "scripts/dmenu-bw"
+
+[[scripts]]
+  name = "clipboard"
+  path = "scripts/dmenu-clipboard"
+
+[[scripts]]
+  name = "emoji"
+  path = "scripts/dmenu-emoji"
+
+[[scripts]]
+  name = "iwd"
+  path = "scripts/dmenu-iwd"
+
+[[scripts]]
+  name = "radio"
+  path = "scripts/dmenu-radio"
+
+[[scripts]]
+  name = "virt"
+  path = "scripts/dmenu-virt"
+
