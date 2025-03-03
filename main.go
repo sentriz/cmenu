@@ -3,11 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -18,21 +19,25 @@ import (
 )
 
 func main() {
+	logFile, err := os.OpenFile("/tmp/cml", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
+	defer logFile.Close()
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{})))
+
 	config, err := parseConfig("config.toml")
 	if err != nil {
 		panic(err)
 	}
 
-	confForScript := func(name string) scriptConf {
-		for _, s := range config.Scripts {
-			if s.Name == name {
-				return s
-			}
-		}
-		return scriptConf{}
-	}
+	slog.Info("starting cmenu")
 
-	_ = confForScript
+	scriptByName := make(map[string]scriptConf, len(config.Scripts))
+	for _, s := range config.Scripts {
+		scriptByName[s.Name] = s
+	}
 
 	vx, err := vaxis.New(vaxis.Options{})
 	if err != nil {
@@ -46,7 +51,7 @@ func main() {
 	var groups []*Group
 	for _, sc := range config.Scripts {
 		spinner := spinner.New(vx, 50*time.Millisecond)
-		spinner.Frames = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
+		spinner.Frames = []rune("▌▀▐▄")
 		group := &Group{
 			heading: sc.Name,
 			spinner: spinner,
@@ -56,7 +61,7 @@ func main() {
 			group.expanded = true
 
 			go func() {
-				if err := loadScript(ctx, vx, &sync.RWMutex{}, group, sc.Path); err != nil {
+				if err := loadScript(ctx, vx, group, sc.Path); err != nil {
 					panic(err)
 				}
 			}()
@@ -71,10 +76,8 @@ func main() {
 		New().
 		SetPrompt("> ")
 
-	var vl sync.RWMutex
-
 	for ev := range vx.Events() {
-		vl.RLock()
+		slog.Info("new ev", "ev", fmt.Sprintf("%T", ev))
 
 		win := vx.Window()
 		win.Clear()
@@ -100,14 +103,19 @@ func main() {
 				list.PageUp(win)
 			case "Left":
 				if hdx, g := list.ActiveGroup(); g != nil {
-					list.GroupCollapse(hdx, g)
+					if g.expanded { // collapse current
+						list.GroupCollapse(hdx, g)
+						break
+					}
+					for _, g := range list.groups { // collapse all
+						list.GroupCollapse(hdx, g)
+					}
 				}
-
 			case "Right":
 				if _, g := list.ActiveGroup(); g != nil {
 					list.GroupExpand(g)
 					go func() {
-						if err := loadScript(ctx, vx, &vl, g, confForScript(g.heading).Path); err != nil {
+						if err := loadScript(ctx, vx, g, scriptByName[g.heading].Path); err != nil {
 							panic(err)
 						}
 					}()
@@ -128,8 +136,6 @@ func main() {
 		list.Draw(listWin)
 
 		vx.Render()
-
-		vl.RUnlock()
 	}
 }
 
@@ -143,21 +149,28 @@ type Group struct {
 }
 
 type List struct {
-	index  int
-	groups []*Group
+	lastQuery string
+	index     int
+	groups    []*Group
 }
 
 func NewList(groups []*Group) List {
 	return List{groups: groups}
 }
 
-func (m *List) Draw(win vaxis.Window) {
-	defaultStyle := vaxis.Style{}
-	selectedStyle := vaxis.Style{Attribute: vaxis.AttrReverse}
+var (
+	defaultStyle = vaxis.Style{}
+	headerStyle  = vaxis.Style{
+		Background: vaxis.IndexColor(7),
+		Attribute:  vaxis.AttrItalic,
+	}
+	selectedStyle = vaxis.Style{Attribute: vaxis.AttrReverse}
+)
 
+func (m *List) Draw(win vaxis.Window) {
 	var i int
 	for _, g := range m.groups {
-		style := defaultStyle
+		style := headerStyle
 		if i == m.index {
 			style = selectedStyle
 		}
@@ -187,6 +200,12 @@ func (m *List) Filter(query string) {
 		}
 		return
 	}
+
+	if query == m.lastQuery {
+		return
+	}
+
+	m.lastQuery = query
 
 	for _, g := range m.groups {
 		g.filtered = nil
@@ -267,15 +286,9 @@ func (m *List) PageUp(win vaxis.Window) {
 	m.index = max(0, m.index-height)
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, vl *sync.RWMutex, g *Group, script string) error {
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, g *Group, script string) error {
 	g.spinner.Start()
-
-	defer func() {
-		time.Sleep(20 * time.Millisecond) // make sure we can see it
-		g.spinner.Stop()
-	}()
-
-	defer vx.PostEvent(vaxis.Redraw{})
+	defer g.spinner.Stop()
 
 	cmd := exec.CommandContext(ctx, script)
 	cmd.Cancel = func() error {
@@ -291,25 +304,24 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, vl *sync.RWMutex, g *Group
 		return err
 	}
 
-	time.Sleep(600 * time.Millisecond)
-
-	vl.Lock()
-
-	g.items = nil
-
 	sc := bufio.NewScanner(stdout)
+
+	var lines []string
 	for sc.Scan() {
-		g.items = append(g.items, sc.Text())
+		lines = append(lines, sc.Text())
 	}
+
 	if err := sc.Err(); err != nil {
 		return err
 	}
-
-	vl.Unlock()
-
 	if err := cmd.Wait(); err != nil {
 		return err
 	}
+
+	vx.SyncFunc(func() {
+		g.items = lines
+	})
+
 	return nil
 }
 
