@@ -18,31 +18,21 @@ import (
 )
 
 func main() {
-	configFile, err := os.Open("config.toml")
+	config, err := parseConfig("config.toml")
 	if err != nil {
 		panic(err)
 	}
 
-	type scriptConfig struct {
-		Name    string
-		Path    string
-		Preview int
-	}
-	var config struct {
-		Scripts []scriptConfig
-	}
-	if _, err := toml.NewDecoder(configFile).Decode(&config); err != nil {
-		panic(err)
-	}
-
-	confForScript := func(name string) scriptConfig {
+	confForScript := func(name string) scriptConf {
 		for _, s := range config.Scripts {
 			if s.Name == name {
 				return s
 			}
 		}
-		return scriptConfig{}
+		return scriptConf{}
 	}
+
+	_ = confForScript
 
 	vx, err := vaxis.New(vaxis.Options{})
 	if err != nil {
@@ -66,7 +56,7 @@ func main() {
 			group.expanded = true
 
 			go func() {
-				if err := loadScript(ctx, vx, group, sc.Path); err != nil {
+				if err := loadScript(ctx, vx, &sync.RWMutex{}, group, sc.Path); err != nil {
 					panic(err)
 				}
 			}()
@@ -81,7 +71,11 @@ func main() {
 		New().
 		SetPrompt("> ")
 
+	var vl sync.RWMutex
+
 	for ev := range vx.Events() {
+		vl.RLock()
+
 		win := vx.Window()
 		win.Clear()
 
@@ -105,13 +99,15 @@ func main() {
 			case "Page_Up":
 				list.PageUp(win)
 			case "Left":
-				list.GroupCollapse()
-			case "Right":
-				list.GroupExpand()
+				if hdx, g := list.ActiveGroup(); g != nil {
+					list.GroupCollapse(hdx, g)
+				}
 
+			case "Right":
 				if _, g := list.ActiveGroup(); g != nil {
+					list.GroupExpand(g)
 					go func() {
-						if err := loadScript(ctx, vx, g, confForScript(g.heading).Path); err != nil {
+						if err := loadScript(ctx, vx, &vl, g, confForScript(g.heading).Path); err != nil {
 							panic(err)
 						}
 					}()
@@ -132,12 +128,13 @@ func main() {
 		list.Draw(listWin)
 
 		vx.Render()
+
+		vl.RUnlock()
 	}
 }
 
 type Group struct {
 	spinner *spinner.Model
-	mu      sync.RWMutex
 
 	heading  string
 	items    []string
@@ -160,8 +157,6 @@ func (m *List) Draw(win vaxis.Window) {
 
 	var i int
 	for _, g := range m.groups {
-		g.mu.RLock()
-
 		style := defaultStyle
 		if i == m.index {
 			style = selectedStyle
@@ -182,8 +177,6 @@ func (m *List) Draw(win vaxis.Window) {
 				i++
 			}
 		}
-
-		g.mu.RUnlock()
 	}
 }
 
@@ -209,15 +202,13 @@ func (m *List) Filter(query string) {
 	}
 }
 
-func (m *List) GroupExpand()   { m.setGroupExpand(true) }
-func (m *List) GroupCollapse() { m.setGroupExpand(false) }
-
-func (m *List) setGroupExpand(expand bool) {
-	if headerIdx, g := m.ActiveGroup(); g != nil {
-		g.expanded = expand
-		if !expand && m.index > headerIdx {
-			m.index = headerIdx
-		}
+func (m *List) GroupExpand(g *Group) {
+	g.expanded = true
+}
+func (m *List) GroupCollapse(headerIdx int, g *Group) {
+	g.expanded = false
+	if m.index > headerIdx {
+		m.index = headerIdx
 	}
 }
 
@@ -276,16 +267,13 @@ func (m *List) PageUp(win vaxis.Window) {
 	m.index = max(0, m.index-height)
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, g *Group, script string) error {
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, vl *sync.RWMutex, g *Group, script string) error {
 	g.spinner.Start()
 
 	defer func() {
 		time.Sleep(20 * time.Millisecond) // make sure we can see it
 		g.spinner.Stop()
 	}()
-
-	g.mu.Lock()
-	defer g.mu.Unlock()
 
 	defer vx.PostEvent(vaxis.Redraw{})
 
@@ -303,6 +291,10 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, g *Group, script string) e
 		return err
 	}
 
+	time.Sleep(600 * time.Millisecond)
+
+	vl.Lock()
+
 	g.items = nil
 
 	sc := bufio.NewScanner(stdout)
@@ -313,8 +305,33 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, g *Group, script string) e
 		return err
 	}
 
+	vl.Unlock()
+
 	if err := cmd.Wait(); err != nil {
 		return err
 	}
 	return nil
+}
+
+type config struct {
+	Scripts []scriptConf
+}
+type scriptConf struct {
+	Name    string
+	Path    string
+	Preview int
+}
+
+func parseConfig(path string) (config, error) {
+	configFile, err := os.Open(path)
+	if err != nil {
+		return config{}, err
+	}
+
+	var conf config
+	if _, err := toml.NewDecoder(configFile).Decode(&conf); err != nil {
+		return config{}, err
+	}
+
+	return conf, nil
 }
