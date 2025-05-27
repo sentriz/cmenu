@@ -19,13 +19,18 @@ import (
 )
 
 func main() {
-	logFile, err := os.OpenFile("/tmp/cml", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-	defer logFile.Close()
+	var handler = slog.DiscardHandler
+	if true {
+		logFile, err := os.OpenFile("/tmp/cml", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+		if err != nil {
+			panic(err)
+		}
+		defer logFile.Close()
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{})))
+		handler = slog.NewTextHandler(logFile, &slog.HandlerOptions{})
+	}
+
+	slog.SetDefault(slog.New(handler))
 
 	config, err := parseConfig("config.toml")
 	if err != nil {
@@ -51,7 +56,8 @@ func main() {
 	var groups []*Group
 	for _, sc := range config.Scripts {
 		spinner := spinner.New(vx, 50*time.Millisecond)
-		spinner.Frames = []rune("▌▀▐▄")
+		spinner.Frames = []rune("▀▐▄▌")
+
 		group := &Group{
 			heading: sc.Name,
 			spinner: spinner,
@@ -120,6 +126,15 @@ func main() {
 						}
 					}()
 				}
+			case "Enter":
+				g, item := list.ActiveItem()
+				if g == nil || item == "" {
+					continue
+				}
+				if err := runScriptItem(ctx, vx, scriptByName[g.heading].Path, item); err != nil {
+					panic(err)
+				}
+				return
 			}
 		case vaxis.SyncFunc:
 			ev()
@@ -249,6 +264,27 @@ func (m *List) ActiveGroup() (int, *Group) {
 	return -1, nil
 }
 
+func (m *List) ActiveItem() (group *Group, item string) {
+	headerIdx, g := m.ActiveGroup()
+	if g == nil {
+		return nil, ""
+	}
+
+	// on a header
+	if headerIdx == m.index {
+		return nil, ""
+	}
+
+	if g.expanded {
+		itemIndex := m.index - (headerIdx + 1)
+		if itemIndex >= 0 && itemIndex < len(g.filtered) {
+			return g, g.filtered[itemIndex]
+		}
+	}
+
+	return nil, ""
+}
+
 func (m *List) totalVisibleItems() int {
 	var total int
 	for _, g := range m.groups {
@@ -322,6 +358,14 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, g *Group, script string) e
 		g.items = lines
 	})
 
+	return nil
+}
+
+func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, script string, item string) (err error) {
+	cmd := exec.CommandContext(ctx, script, item)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: output: %q", err, string(output))
+	}
 	return nil
 }
 
