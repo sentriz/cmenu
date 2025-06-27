@@ -1,39 +1,56 @@
+[[triggers]]
+  key = "a"
+  scripts = ["pulse", "bluetooth"]
+
+[[triggers]]
+  key = "b"
+  scripts = ["bluetooth", "pulse"]
+
+
 [[scripts]]
   name = "bluetooth"
   path = "scripts/dmenu-bluetooth"
   preview = 2
+  colour = 4
 
 [[scripts]]
   name = "pulse"
   path = "scripts/dmenu-pulse"
   preview = 2
+  colour = 6
 
 [[scripts]]
   name = "package"
   path = "scripts/dmenu-package"
   preview = 3
+  colour = 2
 
 [[scripts]]
   name = "bw"
   path = "scripts/dmenu-bw"
+  colour = 12
 
 [[scripts]]
   name = "clipboard"
   path = "scripts/dmenu-clipboard"
+  colour = 11
 
 [[scripts]]
   name = "emoji"
   path = "scripts/dmenu-emoji"
+  colour = 3
 
 [[scripts]]
   name = "iwd"
   path = "scripts/dmenu-iwd"
+  colour = 10
 
 [[scripts]]
   name = "radio"
   path = "scripts/dmenu-radio"
+  colour = 1
 
 [[scripts]]
   name = "virt"
   path = "scripts/dmenu-virt"
-
+  colour = 5

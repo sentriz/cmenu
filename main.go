@@ -2,18 +2,20 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
-	"time"
+
+	"scrap/listw"
 
 	"git.sr.ht/~rockorager/vaxis"
-	"git.sr.ht/~rockorager/vaxis/widgets/spinner"
 	"git.sr.ht/~rockorager/vaxis/widgets/textinput"
 	"github.com/BurntSushi/toml"
 )
@@ -25,7 +27,9 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		defer logFile.Close()
+		defer func() {
+			_ = logFile.Close()
+		}()
 
 		handler = slog.NewTextHandler(logFile, &slog.HandlerOptions{})
 	}
@@ -53,30 +57,20 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	var groups []*Group
+	// spinner := spinner.New(vx, 50*time.Millisecond)
+	// spinner.Frames = []rune("▀▐▄▌")
+
+	list := listw.New[ScriptLine]()
+
 	for _, sc := range config.Scripts {
-		spinner := spinner.New(vx, 50*time.Millisecond)
-		spinner.Frames = []rune("▀▐▄▌")
-
-		group := &Group{
-			heading: sc.Name,
-			spinner: spinner,
-		}
-
 		if sc.Preview > 0 {
-			group.expanded = true
-
 			go func() {
-				if err := loadScript(ctx, vx, group, sc.Path); err != nil {
+				if err := loadScript(ctx, vx, list, sc); err != nil {
 					panic(err)
 				}
 			}()
 		}
-
-		groups = append(groups, group)
 	}
-
-	list := NewList(groups)
 
 	inp := textinput.
 		New().
@@ -107,31 +101,12 @@ func main() {
 				list.PageDown(win)
 			case "Page_Up":
 				list.PageUp(win)
-			case "Left":
-				if hdx, g := list.ActiveGroup(); g != nil {
-					if g.expanded { // collapse current
-						list.GroupCollapse(hdx, g)
-						break
-					}
-					for _, g := range list.groups { // collapse all
-						list.GroupCollapse(hdx, g)
-					}
-				}
-			case "Right":
-				if _, g := list.ActiveGroup(); g != nil {
-					list.GroupExpand(g)
-					go func() {
-						if err := loadScript(ctx, vx, g, scriptByName[g.heading].Path); err != nil {
-							panic(err)
-						}
-					}()
-				}
 			case "Enter":
-				g, item := list.ActiveItem()
-				if g == nil || item == "" {
+				item, ok := list.ActiveItem()
+				if !ok {
 					continue
 				}
-				if err := runScriptItem(ctx, vx, scriptByName[g.heading].Path, item); err != nil {
+				if err := runScriptItem(ctx, vx, scriptByName[item.script].Path, item); err != nil {
 					panic(err)
 				}
 				return
@@ -142,7 +117,29 @@ func main() {
 
 		inp.Update(ev)
 
-		list.Filter(inp.String())
+		query := inp.String()
+
+		var filterScripts []string
+		if left, rest, ok := strings.Cut(query, " "); ok {
+			for _, t := range config.Triggers {
+				if left == t.Key {
+					filterScripts = t.Scripts
+					query = rest
+					break
+				}
+			}
+		}
+
+		list.FilterFunc(func(s ScriptLine) bool {
+			if len(filterScripts) == 0 {
+				return true
+			}
+			return slices.Contains(filterScripts, s.script)
+		})
+
+		list.SortFunc(func(a, b ScriptLine) int {
+			return cmp.Compare(slices.Index(filterScripts, a.script), slices.Index(filterScripts, b.script))
+		})
 
 		inpWin := win.New(0, 0, width, 1)
 		inp.Draw(inpWin)
@@ -154,179 +151,26 @@ func main() {
 	}
 }
 
-type Group struct {
-	spinner *spinner.Model
-
-	heading  string
-	items    []string
-	filtered []string
-	expanded bool
+type ScriptLine struct {
+	colour int
+	script string
+	text   string
 }
 
-type List struct {
-	lastQuery string
-	index     int
-	groups    []*Group
-}
-
-func NewList(groups []*Group) List {
-	return List{groups: groups}
-}
-
-var (
-	defaultStyle = vaxis.Style{}
-	headerStyle  = vaxis.Style{
-		Background: vaxis.IndexColor(7),
-		Attribute:  vaxis.AttrItalic,
+func (i ScriptLine) FilterText() string { return i.text }
+func (i ScriptLine) Draw(selected bool) []vaxis.Segment {
+	var style vaxis.Style
+	if selected {
+		style.Attribute = vaxis.AttrReverse
 	}
-	selectedStyle = vaxis.Style{Attribute: vaxis.AttrReverse}
-)
-
-func (m *List) Draw(win vaxis.Window) {
-	var i int
-	for _, g := range m.groups {
-		style := headerStyle
-		if i == m.index {
-			style = selectedStyle
-		}
-
-		win.Println(i, vaxis.Segment{Text: g.heading, Style: style})
-		g.spinner.Draw(win.New(len(g.heading)+1, i, 1, 1))
-
-		i++
-
-		if g.expanded {
-			for _, item := range g.filtered {
-				style = defaultStyle
-				if i == m.index {
-					style = selectedStyle
-				}
-				win.Println(i, vaxis.Segment{Text: "  " + item, Style: style})
-				i++
-			}
-		}
+	return []vaxis.Segment{
+		{Text: i.script, Style: vaxis.Style{Background: vaxis.IndexColor(uint8(i.colour))}},
+		{Text: " " + i.text, Style: style},
 	}
 }
 
-func (m *List) Filter(query string) {
-	if query == "" {
-		for _, g := range m.groups {
-			g.filtered = g.items
-		}
-		return
-	}
-
-	if query == m.lastQuery {
-		return
-	}
-
-	m.lastQuery = query
-
-	for _, g := range m.groups {
-		g.filtered = nil
-		for _, s := range g.items {
-			if strings.Contains(strings.ToLower(s), query) {
-				g.filtered = append(g.filtered, s)
-			}
-		}
-	}
-
-	if total := m.totalVisibleItems(); m.index >= total {
-		m.End()
-	}
-}
-
-func (m *List) GroupExpand(g *Group) {
-	g.expanded = true
-}
-func (m *List) GroupCollapse(headerIdx int, g *Group) {
-	g.expanded = false
-	if m.index > headerIdx {
-		m.index = headerIdx
-	}
-}
-
-func (m *List) ActiveGroup() (int, *Group) {
-	var idx int
-	for _, g := range m.groups {
-		if m.index == idx {
-			return idx, g
-		}
-		idx++
-
-		if g.expanded {
-			if m.index < idx+len(g.filtered) {
-				return idx - 1, g
-			}
-			idx += len(g.filtered)
-		}
-	}
-	return -1, nil
-}
-
-func (m *List) ActiveItem() (group *Group, item string) {
-	headerIdx, g := m.ActiveGroup()
-	if g == nil {
-		return nil, ""
-	}
-
-	// on a header
-	if headerIdx == m.index {
-		return nil, ""
-	}
-
-	if g.expanded {
-		itemIndex := m.index - (headerIdx + 1)
-		if itemIndex >= 0 && itemIndex < len(g.filtered) {
-			return g, g.filtered[itemIndex]
-		}
-	}
-
-	return nil, ""
-}
-
-func (m *List) totalVisibleItems() int {
-	var total int
-	for _, g := range m.groups {
-		total++ // heading
-		if g.expanded {
-			total += len(g.filtered)
-		}
-	}
-	return total
-}
-
-func (m *List) Down() {
-	m.index = min(m.totalVisibleItems()-1, m.index+1)
-}
-
-func (m *List) Up() {
-	m.index = max(0, m.index-1)
-}
-
-func (m *List) Home() {
-	m.index = 0
-}
-
-func (m *List) End() {
-	m.index = m.totalVisibleItems() - 1
-}
-
-func (m *List) PageDown(win vaxis.Window) {
-	_, height := win.Size()
-	m.index = min(m.totalVisibleItems()-1, m.index+height)
-}
-
-func (m *List) PageUp(win vaxis.Window) {
-	_, height := win.Size()
-	m.index = max(0, m.index-height)
-}
-
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, g *Group, script string) error {
-	g.spinner.Start()
-	defer g.spinner.Stop()
-
-	cmd := exec.CommandContext(ctx, script)
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, m *listw.List[ScriptLine], sconf scriptConf) error {
+	cmd := exec.CommandContext(ctx, sconf.Path)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}
@@ -342,9 +186,13 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, g *Group, script string) e
 
 	sc := bufio.NewScanner(stdout)
 
-	var lines []string
+	var lines []ScriptLine
 	for sc.Scan() {
-		lines = append(lines, sc.Text())
+		lines = append(lines, ScriptLine{
+			script: sconf.Name,
+			text:   sc.Text(),
+			colour: sconf.Colour,
+		})
 	}
 
 	if err := sc.Err(); err != nil {
@@ -355,14 +203,14 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, g *Group, script string) e
 	}
 
 	vx.SyncFunc(func() {
-		g.items = lines
+		m.Append(lines)
 	})
 
 	return nil
 }
 
-func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, script string, item string) (err error) {
-	cmd := exec.CommandContext(ctx, script, item)
+func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, item ScriptLine) (err error) {
+	cmd := exec.CommandContext(ctx, scriptPath, item.text)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: output: %q", err, string(output))
 	}
@@ -370,12 +218,20 @@ func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, script string, item stri
 }
 
 type config struct {
-	Scripts []scriptConf
+	Scripts  []scriptConf
+	Triggers []triggerConf
 }
+
 type scriptConf struct {
 	Name    string
 	Path    string
 	Preview int
+	Colour  int
+}
+
+type triggerConf struct {
+	Key     string
+	Scripts []string
 }
 
 func parseConfig(path string) (config, error) {
