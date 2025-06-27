@@ -131,10 +131,12 @@ func main() {
 		}
 
 		list.FilterFunc(func(s ScriptLine) bool {
-			if len(filterScripts) == 0 {
-				return true
+			if len(filterScripts) > 0 {
+				if !slices.Contains(filterScripts, s.script) {
+					return false
+				}
 			}
-			return slices.Contains(filterScripts, s.script)
+			return strings.Contains(strings.ToLower(s.FilterText()), query)
 		})
 
 		list.SortFunc(func(a, b ScriptLine) int {
