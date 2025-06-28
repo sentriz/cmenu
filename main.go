@@ -21,21 +21,6 @@ import (
 )
 
 func main() {
-	var handler = slog.DiscardHandler
-	if true {
-		logFile, err := os.OpenFile("/tmp/cml", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
-		if err != nil {
-			panic(err)
-		}
-		defer func() {
-			_ = logFile.Close()
-		}()
-
-		handler = slog.NewTextHandler(logFile, &slog.HandlerOptions{})
-	}
-
-	slog.SetDefault(slog.New(handler))
-
 	config, err := parseConfig("config.toml")
 	if err != nil {
 		panic(err)
@@ -101,6 +86,16 @@ func main() {
 				list.PageDown(win)
 			case "Page_Up":
 				list.PageUp(win)
+			case "Right":
+				item, ok := list.ActiveItem()
+				if !ok {
+					continue
+				}
+				go func() {
+					if err := loadScript(ctx, vx, list, scriptByName[item.script]); err != nil {
+						panic(err)
+					}
+				}()
 			case "Enter":
 				item, ok := list.ActiveItem()
 				if !ok {
