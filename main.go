@@ -2,18 +2,13 @@ package main
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
-	"slices"
 	"strings"
 	"syscall"
-
-	"scrap/listw"
 
 	"git.sr.ht/~rockorager/vaxis"
 	"git.sr.ht/~rockorager/vaxis/widgets/textinput"
@@ -21,12 +16,13 @@ import (
 )
 
 func main() {
+	lf, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+	_ = lf
+
 	config, err := parseConfig("config.toml")
 	if err != nil {
 		panic(err)
 	}
-
-	slog.Info("starting cmenu")
 
 	scriptByName := make(map[string]scriptConf, len(config.Scripts))
 	for _, s := range config.Scripts {
@@ -45,12 +41,16 @@ func main() {
 	// spinner := spinner.New(vx, 50*time.Millisecond)
 	// spinner.Frames = []rune("▀▐▄▌")
 
-	list := listw.New[ScriptLine]()
+	data := map[string][]string{}
+
+	var (
+		activeIndex int
+	)
 
 	for _, sc := range config.Scripts {
 		if sc.Preview > 0 {
 			go func() {
-				if err := loadScript(ctx, vx, list, sc); err != nil {
+				if err := loadScript(ctx, vx, data, sc); err != nil {
 					panic(err)
 				}
 			}()
@@ -62,8 +62,6 @@ func main() {
 		SetPrompt("> ")
 
 	for ev := range vx.Events() {
-		slog.Info("new ev", "ev", fmt.Sprintf("%T", ev))
-
 		win := vx.Window()
 		win.Clear()
 
@@ -75,35 +73,25 @@ func main() {
 			case "Ctrl+c", "q":
 				return
 			case "Down", "j":
-				list.Down()
+				// activeIndex++?
+				_ = activeIndex
 			case "Up", "k":
-				list.Up()
 			case "End":
-				list.End()
 			case "Home":
-				list.Home()
 			case "Page_Down":
-				list.PageDown(win)
 			case "Page_Up":
-				list.PageUp(win)
 			case "Right":
-				item, ok := list.ActiveItem()
-				if !ok {
-					continue
-				}
-				go func() {
-					if err := loadScript(ctx, vx, list, scriptByName[item.script]); err != nil {
-						panic(err)
-					}
-				}()
+				// some active item
+				// go func() {
+				// 	if err := loadScript(ctx, vx, list, scriptByName[item.script]); err != nil {
+				// 		panic(err)
+				// 	}
+				// }()
 			case "Enter":
-				item, ok := list.ActiveItem()
-				if !ok {
-					continue
-				}
-				if err := runScriptItem(ctx, vx, scriptByName[item.script].Path, item); err != nil {
-					panic(err)
-				}
+				// some active item
+				// if err := runScriptItem(ctx, vx, scriptByName[item.script].Path, item); err != nil {
+				// 	panic(err)
+				// }
 				return
 			}
 		case vaxis.SyncFunc:
@@ -114,59 +102,55 @@ func main() {
 
 		query := inp.String()
 
-		var filterScripts []string
+		var activeScripts []scriptConf
 		if left, rest, ok := strings.Cut(query, " "); ok {
 			for _, t := range config.Triggers {
 				if left == t.Key {
-					filterScripts = t.Scripts
+					for _, scriptName := range t.Scripts {
+						activeScripts = append(activeScripts, scriptByName[scriptName])
+					}
 					query = rest
 					break
 				}
 			}
 		}
 
-		list.FilterFunc(func(s ScriptLine) bool {
-			if len(filterScripts) > 0 {
-				if !slices.Contains(filterScripts, s.script) {
-					return false
-				}
-			}
-			return strings.Contains(strings.ToLower(s.FilterText()), query)
-		})
-
-		list.SortFunc(func(a, b ScriptLine) int {
-			return cmp.Compare(slices.Index(filterScripts, a.script), slices.Index(filterScripts, b.script))
-		})
+		if len(activeScripts) == 0 {
+			activeScripts = config.Scripts
+		}
 
 		inpWin := win.New(0, 0, width, 1)
 		inp.Draw(inpWin)
 
 		listWin := win.New(0, 1, width, height-1)
-		list.Draw(listWin)
+
+		var i int
+		for _, sconf := range activeScripts {
+			for _, item := range data[sconf.Name] {
+				if query != "" && !strings.Contains(item, query) {
+					continue
+				}
+				drawLine(listWin, i, sconf, item, false)
+				i++
+			}
+		}
 
 		vx.Render()
 	}
 }
 
-type ScriptLine struct {
-	colour int
-	script string
-	text   string
-}
-
-func (i ScriptLine) FilterText() string { return i.text }
-func (i ScriptLine) Draw(selected bool) []vaxis.Segment {
+func drawLine(win vaxis.Window, i int, sconf scriptConf, text string, selected bool) {
 	var style vaxis.Style
 	if selected {
 		style.Attribute = vaxis.AttrReverse
 	}
-	return []vaxis.Segment{
-		{Text: i.script, Style: vaxis.Style{Background: vaxis.IndexColor(uint8(i.colour))}},
-		{Text: " " + i.text, Style: style},
-	}
+	win.Println(i,
+		vaxis.Segment{Text: sconf.Name, Style: vaxis.Style{Background: vaxis.IndexColor(uint8(sconf.Colour))}},
+		vaxis.Segment{Text: " " + text, Style: style},
+	)
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, m *listw.List[ScriptLine], sconf scriptConf) error {
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, data map[string][]string, sconf scriptConf) error {
 	cmd := exec.CommandContext(ctx, sconf.Path)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
@@ -183,13 +167,9 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, m *listw.List[ScriptLine],
 
 	sc := bufio.NewScanner(stdout)
 
-	var lines []ScriptLine
+	var lines []string
 	for sc.Scan() {
-		lines = append(lines, ScriptLine{
-			script: sconf.Name,
-			text:   sc.Text(),
-			colour: sconf.Colour,
-		})
+		lines = append(lines, sc.Text())
 	}
 
 	if err := sc.Err(); err != nil {
@@ -200,14 +180,14 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, m *listw.List[ScriptLine],
 	}
 
 	vx.SyncFunc(func() {
-		m.Append(lines)
+		data[sconf.Name] = lines
 	})
 
 	return nil
 }
 
-func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, item ScriptLine) (err error) {
-	cmd := exec.CommandContext(ctx, scriptPath, item.text)
+func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, text string) (err error) {
+	cmd := exec.CommandContext(ctx, scriptPath, text)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: output: %q", err, string(output))
 	}
