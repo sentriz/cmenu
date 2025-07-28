@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,8 +19,8 @@ import (
 )
 
 func main() {
-	lf, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
-	_ = lf
+	// lf, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+	// _ = lf
 
 	config, err := parseConfig("config.toml")
 	if err != nil {
@@ -119,12 +118,15 @@ func main() {
 						panic(err)
 					}
 				}()
-			case "Enter":
+			case "Enter", "Shift+Enter":
 				_, sconf, text := active()
-				if err := runScriptItem(ctx, vx, sconf.Path, text); err != nil {
+				if err := runScriptItem(context.Background(), vx, sconf.Path, text); err != nil {
 					panic(err)
 				}
-				return
+				// only quit if shift is not held
+				if ev.Modifiers&vaxis.ModShift == 0 {
+					return
+				}
 			}
 		case vaxis.SyncFunc:
 			ev()
@@ -224,8 +226,8 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, data map[string][]string, 
 
 func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, text string) (err error) {
 	cmd := exec.CommandContext(ctx, scriptPath, text)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w: output: %q", err, string(output))
+	if err := cmd.Start(); err != nil {
+		return err
 	}
 	return nil
 }
