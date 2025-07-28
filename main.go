@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -41,11 +42,20 @@ func main() {
 	// spinner := spinner.New(vx, 50*time.Millisecond)
 	// spinner.Frames = []rune("▀▐▄▌")
 
-	data := map[string][]string{}
+	type line struct{ group, text string }
 
 	var (
-		activeIndex int
+		data      = map[string][]string{}
+		index     int
+		visGroups []string
+		visLines  []line
 	)
+
+	active := func() (int, scriptConf, string) {
+		item := visLines[index]
+		sconf := scriptByName[item.group]
+		return index, sconf, item.text
+	}
 
 	for _, sc := range config.Scripts {
 		if sc.Preview > 0 {
@@ -73,25 +83,25 @@ func main() {
 			case "Ctrl+c", "q":
 				return
 			case "Down", "j":
-				// activeIndex++?
-				_ = activeIndex
+				index = clamp(index+1, 0, len(visLines)-1)
 			case "Up", "k":
+				index = clamp(index-1, 0, len(visLines)-1)
 			case "End":
 			case "Home":
 			case "Page_Down":
 			case "Page_Up":
 			case "Right":
-				// some active item
-				// go func() {
-				// 	if err := loadScript(ctx, vx, list, scriptByName[item.script]); err != nil {
-				// 		panic(err)
-				// 	}
-				// }()
+				_, sconf, _ := active()
+				go func() {
+					if err := loadScript(ctx, vx, data, sconf); err != nil {
+						panic(err)
+					}
+				}()
 			case "Enter":
-				// some active item
-				// if err := runScriptItem(ctx, vx, scriptByName[item.script].Path, item); err != nil {
-				// 	panic(err)
-				// }
+				_, sconf, text := active()
+				if err := runScriptItem(ctx, vx, sconf.Path, text); err != nil {
+					panic(err)
+				}
 				return
 			}
 		case vaxis.SyncFunc:
@@ -102,37 +112,39 @@ func main() {
 
 		query := inp.String()
 
-		var activeScripts []scriptConf
+		visGroups = visGroups[:0]
 		if left, rest, ok := strings.Cut(query, " "); ok {
 			for _, t := range config.Triggers {
 				if left == t.Key {
 					for _, scriptName := range t.Scripts {
-						activeScripts = append(activeScripts, scriptByName[scriptName])
+						visGroups = append(visGroups, scriptName)
 					}
 					query = rest
 					break
 				}
 			}
 		}
+		if len(visGroups) == 0 {
+			for _, sconf := range config.Scripts {
+				visGroups = append(visGroups, sconf.Name)
+			}
+		}
 
-		if len(activeScripts) == 0 {
-			activeScripts = config.Scripts
+		visLines = visLines[:0]
+		for _, g := range visGroups {
+			for _, item := range data[g] {
+				if strings.Contains(item, query) {
+					visLines = append(visLines, line{group: g, text: item})
+				}
+			}
 		}
 
 		inpWin := win.New(0, 0, width, 1)
 		inp.Draw(inpWin)
 
 		listWin := win.New(0, 1, width, height-1)
-
-		var i int
-		for _, sconf := range activeScripts {
-			for _, item := range data[sconf.Name] {
-				if query != "" && !strings.Contains(item, query) {
-					continue
-				}
-				drawLine(listWin, i, sconf, item, false)
-				i++
-			}
+		for i, it := range visLines {
+			drawLine(listWin, i, scriptByName[it.group], it.text, i == index)
 		}
 
 		vx.Render()
@@ -223,4 +235,10 @@ func parseConfig(path string) (config, error) {
 	}
 
 	return conf, nil
+}
+
+func clamp[T cmp.Ordered](v, mn, mx T) T {
+	v = max(v, mn)
+	v = min(v, mx)
+	return v
 }

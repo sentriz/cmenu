@@ -6,6 +6,10 @@
   key = "b"
   scripts = ["bluetooth", "pulse"]
 
+[[triggers]]
+  key = "p"
+  scripts = ["package"]
+
 
 [[scripts]]
   name = "bluetooth"
