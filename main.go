@@ -98,11 +98,11 @@ func main() {
 		switch ev := ev.(type) {
 		case vaxis.Key:
 			switch ev.String() {
-			case "Ctrl+c", "q":
+			case "Escape", "Ctrl+c":
 				return
-			case "Down", "j":
+			case "Down":
 				index = clamp(index+1, 0, len(visLines)-1)
-			case "Up", "k":
+			case "Up":
 				index = clamp(index-1, 0, len(visLines)-1)
 			case "End":
 			case "Home":
