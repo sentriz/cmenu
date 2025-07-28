@@ -9,9 +9,12 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"git.sr.ht/~rockorager/vaxis"
+	"git.sr.ht/~rockorager/vaxis/widgets/spinner"
 	"git.sr.ht/~rockorager/vaxis/widgets/textinput"
 	"github.com/BurntSushi/toml"
 )
@@ -39,13 +42,43 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// spinner := spinner.New(vx, 50*time.Millisecond)
-	// spinner.Frames = []rune("▀▐▄▌")
+	// elements
+	spinner := spinner.New(vx, 50*time.Millisecond)
+	spinner.Frames = []rune("▌▀▐▄")
 
-	type line struct{ group, text string }
+	inp := textinput.
+		New().
+		SetPrompt("> ")
 
 	var (
-		data      = map[string][]string{}
+		data = map[string][]string{}
+	)
+
+	go func() {
+		spinner.Start()
+		defer spinner.Stop()
+
+		var wg sync.WaitGroup
+		for _, sc := range config.Scripts {
+			if sc.Preview == 0 {
+				continue
+			}
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := loadScript(ctx, vx, data, sc); err != nil {
+					panic(err)
+				}
+			}()
+		}
+
+		wg.Wait()
+	}()
+
+	// state
+	type line struct{ group, text string }
+	var (
 		index     int
 		visGroups []string
 		visLines  []line
@@ -56,20 +89,6 @@ func main() {
 		sconf := scriptByName[item.group]
 		return index, sconf, item.text
 	}
-
-	for _, sc := range config.Scripts {
-		if sc.Preview > 0 {
-			go func() {
-				if err := loadScript(ctx, vx, data, sc); err != nil {
-					panic(err)
-				}
-			}()
-		}
-	}
-
-	inp := textinput.
-		New().
-		SetPrompt("> ")
 
 	for ev := range vx.Events() {
 		win := vx.Window()
@@ -93,6 +112,9 @@ func main() {
 			case "Right":
 				_, sconf, _ := active()
 				go func() {
+					spinner.Start()
+					defer spinner.Stop()
+
 					if err := loadScript(ctx, vx, data, sconf); err != nil {
 						panic(err)
 					}
@@ -146,6 +168,8 @@ func main() {
 		for i, it := range visLines {
 			drawLine(listWin, i, scriptByName[it.group], it.text, i == index)
 		}
+
+		spinner.Draw(win)
 
 		vx.Render()
 	}
