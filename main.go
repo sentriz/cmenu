@@ -133,16 +133,15 @@ func main() {
 		}
 
 		inp.Update(ev)
+		inpString := inp.String()
 
-		query := inp.String()
+		query := inpString
 
 		visGroups = visGroups[:0]
 		if left, rest, ok := strings.Cut(query, " "); ok {
 			for _, t := range config.Triggers {
 				if left == t.Key {
-					for _, scriptName := range t.Scripts {
-						visGroups = append(visGroups, scriptName)
-					}
+					visGroups = append(visGroups, t.Scripts...)
 					query = rest
 					break
 				}
@@ -156,7 +155,11 @@ func main() {
 
 		visLines = visLines[:0]
 		for _, g := range visGroups {
-			for _, item := range data[g] {
+			sconf := scriptByName[g]
+			for i, item := range data[g] {
+				if inpString == "" && i >= sconf.Preview {
+					break
+				}
 				if strings.Contains(item, query) {
 					visLines = append(visLines, line{group: g, text: item})
 				}

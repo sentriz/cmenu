@@ -26,7 +26,7 @@
 [[scripts]]
   name = "package"
   path = "scripts/dmenu-package"
-  preview = 3
+  preview = 5
   colour = 2
 
 [[scripts]]
@@ -42,11 +42,13 @@
 [[scripts]]
   name = "emoji"
   path = "scripts/dmenu-emoji"
+  preview = 10
   colour = 3
 
 [[scripts]]
   name = "iwd"
   path = "scripts/dmenu-iwd"
+  preview = 10
   colour = 10
 
 [[scripts]]
