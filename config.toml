@@ -20,33 +20,39 @@
   colour = 2
 
 [[scripts]]
+  triggers = ["b"]
   name = "bw"
   path = "scripts/dmenu-bw"
   colour = 12
 
 [[scripts]]
+  triggers = ["c"]
   name = "clipboard"
   path = "scripts/dmenu-clipboard"
   colour = 11
 
 [[scripts]]
+  triggers = ["e"]
   name = "emoji"
   path = "scripts/dmenu-emoji"
   preview = 10
   colour = 3
 
 [[scripts]]
+  triggers = ["i"]
   name = "iwd"
   path = "scripts/dmenu-iwd"
   preview = 10
   colour = 10
 
 [[scripts]]
+  triggers = ["r"]
   name = "radio"
   path = "scripts/dmenu-radio"
   colour = 1
 
 [[scripts]]
+  triggers = ["v"]
   name = "virt"
   path = "scripts/dmenu-virt"
   colour = 5

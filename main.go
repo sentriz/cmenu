@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,8 +21,8 @@ import (
 )
 
 func main() {
-	// lf, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
-	// _ = lf
+	lf, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+	_ = lf
 
 	config, err := parseConfig("config.toml")
 	if err != nil {
@@ -60,12 +61,12 @@ func main() {
 		SetPrompt("> ")
 	inp.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
 
-	var (
-		data = map[string][]string{}
-	)
+	// TODO: merge
+	var data = map[string][]string{}
+	var scriptState scriptState
 
+	spinner.Start()
 	go func() {
-		spinner.Start()
 		defer spinner.Stop()
 
 		var wg sync.WaitGroup
@@ -77,7 +78,7 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := loadScript(ctx, vx, data, sc); err != nil {
+				if err := loadScript(ctx, vx, nil, &scriptState, data, sc); err != nil {
 					panic(err)
 				}
 			}()
@@ -123,10 +124,7 @@ func main() {
 			case "Right":
 				_, sconf, _ := active()
 				go func() {
-					spinner.Start()
-					defer spinner.Stop()
-
-					if err := loadScript(ctx, vx, data, sconf); err != nil {
+					if err := loadScript(ctx, vx, spinner, &scriptState, data, sconf); err != nil {
 						panic(err)
 					}
 				}()
@@ -160,6 +158,16 @@ func main() {
 			for _, sconf := range scripts {
 				selectedGroups = append(selectedGroups, sconf.Name)
 			}
+		} else {
+			for _, g := range selectedGroups {
+				if !scriptState.has(g) {
+					go func() {
+						if err := loadScript(ctx, vx, spinner, &scriptState, data, scriptByName[g]); err != nil {
+							panic(err)
+						}
+					}()
+				}
+			}
 		}
 
 		visLines = visLines[:0]
@@ -189,21 +197,8 @@ func main() {
 			drawLine(listWin, i, scriptByName[it.group], it.text, i == index)
 		}
 
-		footWin := win.New(0, height-1, width, 1)
-		footSegs := make([]vaxis.Segment, 0, len(scripts)*2)
-		footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
-
-		for _, c := range scripts {
-			if len(footSegs) > 1 {
-				footSegs = append(footSegs, vaxis.Segment{Text: " "})
-			}
-			var style = vaxis.Style{Foreground: vaxis.ColorBlack}
-			if slices.Contains(visGroups, c.Name) {
-				style = vaxis.Style{}
-			}
-			footSegs = append(footSegs, vaxis.Segment{Text: c.Name, Style: style})
-		}
-		footWin.Println(0, footSegs...)
+		footerWin := win.New(0, height-1, width, 1)
+		drawFooter(footerWin, scripts, visGroups)
 
 		vx.Render()
 	}
@@ -220,7 +215,36 @@ func drawLine(win vaxis.Window, i int, sconf scriptConf, text string, selected b
 	)
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, data map[string][]string, sconf scriptConf) error {
+func drawFooter(win vaxis.Window, scripts []scriptConf, visGroups []string) {
+	footSegs := make([]vaxis.Segment, 0, len(scripts)*2)
+	footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
+
+	for _, c := range scripts {
+		if len(footSegs) > 1 {
+			footSegs = append(footSegs, vaxis.Segment{Text: " "})
+		}
+		var style = vaxis.Style{Foreground: vaxis.ColorBlack}
+		if slices.Contains(visGroups, c.Name) {
+			style = vaxis.Style{}
+		}
+		footSegs = append(footSegs, vaxis.Segment{Text: c.Name, Style: style})
+	}
+
+	win.Println(0, footSegs...)
+}
+
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner.Model, st *scriptState, data map[string][]string, sconf scriptConf) error {
+	stop, ok := st.start(sconf.Name)
+	if !ok {
+		return nil
+	}
+	defer stop()
+
+	if spinner != nil {
+		spinner.Start()
+		defer spinner.Stop()
+	}
+
 	cmd := exec.CommandContext(ctx, sconf.Path)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
@@ -294,4 +318,19 @@ func clamp[T cmp.Ordered](v, mn, mx T) T {
 	v = max(v, mn)
 	v = min(v, mx)
 	return v
+}
+
+type scriptState struct {
+	states sync.Map
+}
+
+func (rm *scriptState) has(key string) bool {
+	_, ok := rm.states.Load(key)
+	return ok
+}
+
+func (rm *scriptState) start(key string) (func(), bool) {
+	value, _ := rm.states.LoadOrStore(key, &atomic.Bool{})
+	state := value.(*atomic.Bool)
+	return func() { state.Store(false) }, state.CompareAndSwap(false, true)
 }
