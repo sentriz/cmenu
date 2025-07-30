@@ -53,7 +53,7 @@ func main() {
 	defer cancel()
 
 	// elements
-	spinner := spinner.New(vx, 50*time.Millisecond)
+	spinner := spinner.New(vx, 100*time.Millisecond)
 	spinner.Frames = []rune("▌▀▐▄")
 
 	inp := textinput.
