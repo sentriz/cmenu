@@ -2,7 +2,7 @@
   triggers = ["b", "a"]
   name = "bluetooth"
   path = "scripts/dmenu-bluetooth"
-  preview = 2
+  preview = 10
   colour = 4
 
 [[scripts]]

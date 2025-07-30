@@ -24,23 +24,23 @@ func main() {
 	lf, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
 	_ = lf
 
-	config, err := parseConfig("config.toml")
+	conf, err := parseConfig("config.toml")
 	if err != nil {
 		panic(err)
 	}
 
-	scripts := config.Scripts
-
+	var scriptKeys []string
+	var scripts = map[string]*script{}
 	var triggers = map[string][]string{}
-	for _, s := range scripts {
-		for i, key := range s.Triggers {
-			triggers[key] = slices.Insert(triggers[key], clamp(i, 0, len(triggers[key])), s.Name)
-		}
-	}
 
-	scriptByName := make(map[string]scriptConf, len(scripts))
-	for _, s := range scripts {
-		scriptByName[s.Name] = s
+	for _, sconf := range conf.Scripts {
+		scriptKeys = append(scriptKeys, sconf.Name)
+		scripts[sconf.Name] = &script{
+			scriptConf: sconf,
+		}
+		for i, key := range sconf.Triggers {
+			triggers[key] = slices.Insert(triggers[key], clamp(i, 0, len(triggers[key])), sconf.Name)
+		}
 	}
 
 	vx, err := vaxis.New(vaxis.Options{})
@@ -61,10 +61,6 @@ func main() {
 		SetPrompt("> ")
 	inp.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
 
-	// TODO: merge
-	var data = map[string][]string{}
-	var scriptState scriptState
-
 	spinner.Start()
 	go func() {
 		defer spinner.Stop()
@@ -78,7 +74,7 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := loadScript(ctx, vx, nil, &scriptState, data, sc); err != nil {
+				if err := loadScript(ctx, vx, nil, sc); err != nil {
 					panic(err)
 				}
 			}()
@@ -88,17 +84,17 @@ func main() {
 	}()
 
 	// state
-	type line struct{ group, text string }
+	type line struct{ script, text string }
 	var (
-		index          int
-		selectedGroups []string
-		visGroups      []string
-		visLines       []line
+		index           int
+		selectedScripts []string
+		visScripts      []string
+		visLines        []line
 	)
 
-	active := func() (int, scriptConf, string) {
+	active := func() (int, *script, string) {
 		item := visLines[index]
-		sconf := scriptByName[item.group]
+		sconf := scripts[item.script]
 		return index, sconf, item.text
 	}
 
@@ -122,9 +118,9 @@ func main() {
 			case "Page_Down":
 			case "Page_Up":
 			case "Right":
-				_, sconf, _ := active()
+				_, script, _ := active()
 				go func() {
-					if err := loadScript(ctx, vx, spinner, &scriptState, data, sconf); err != nil {
+					if err := loadScript(ctx, vx, spinner, script); err != nil {
 						panic(err)
 					}
 				}()
@@ -147,22 +143,22 @@ func main() {
 
 		query := inpString
 
-		selectedGroups = selectedGroups[:0]
+		selectedScripts = selectedScripts[:0]
 		if left, rest, ok := strings.Cut(query, " "); ok {
-			if groups := triggers[left]; len(groups) > 0 {
-				selectedGroups = append(selectedGroups, groups...)
+			if s := triggers[left]; len(s) > 0 {
+				selectedScripts = append(selectedScripts, s...)
 				query = rest
 			}
 		}
-		if len(selectedGroups) == 0 {
-			for _, sconf := range scripts {
-				selectedGroups = append(selectedGroups, sconf.Name)
+		if len(selectedScripts) == 0 {
+			for _, s := range scriptKeys {
+				selectedScripts = append(selectedScripts, s)
 			}
 		} else {
-			for _, g := range selectedGroups {
-				if !scriptState.has(g) {
+			for _, s := range selectedScripts {
+				if script := scripts[s]; len(script.lines) == 0 {
 					go func() {
-						if err := loadScript(ctx, vx, spinner, &scriptState, data, scriptByName[g]); err != nil {
+						if err := loadScript(ctx, vx, spinner, script); err != nil {
 							panic(err)
 						}
 					}()
@@ -171,17 +167,17 @@ func main() {
 		}
 
 		visLines = visLines[:0]
-		visGroups = visGroups[:0]
+		visScripts = visScripts[:0]
 
-		for _, g := range selectedGroups {
-			sconf := scriptByName[g]
-			for i, item := range data[g] {
-				if inpString == "" && i >= sconf.Preview {
+		for _, s := range selectedScripts {
+			script := scripts[s]
+			for i, item := range script.lines {
+				if inpString == "" && i >= script.Preview {
 					break
 				}
 				if strings.Contains(item, query) {
-					visLines = append(visLines, line{group: g, text: item})
-					visGroups = append(visGroups, g)
+					visLines = append(visLines, line{script: s, text: item})
+					visScripts = append(visScripts, s)
 				}
 			}
 		}
@@ -194,32 +190,32 @@ func main() {
 
 		listWin := win.New(0, 1, width, height-2)
 		for i, it := range visLines {
-			drawLine(listWin, i, scriptByName[it.group], it.text, i == index)
+			drawLine(listWin, i, scripts[it.script], it.text, i == index)
 		}
 
 		footerWin := win.New(0, height-1, width, 1)
-		drawFooter(footerWin, scripts, visGroups)
+		drawFooter(footerWin, conf, visScripts)
 
 		vx.Render()
 	}
 }
 
-func drawLine(win vaxis.Window, i int, sconf scriptConf, text string, selected bool) {
+func drawLine(win vaxis.Window, i int, script *script, text string, selected bool) {
 	var style vaxis.Style
 	if selected {
 		style.Attribute = vaxis.AttrReverse
 	}
 	win.Println(i,
-		vaxis.Segment{Text: sconf.Name, Style: vaxis.Style{Background: vaxis.IndexColor(uint8(sconf.Colour))}},
+		vaxis.Segment{Text: script.Name, Style: vaxis.Style{Background: vaxis.IndexColor(uint8(script.Colour))}},
 		vaxis.Segment{Text: " " + text, Style: style},
 	)
 }
 
-func drawFooter(win vaxis.Window, scripts []scriptConf, visGroups []string) {
-	footSegs := make([]vaxis.Segment, 0, len(scripts)*2)
+func drawFooter(win vaxis.Window, conf config, visGroups []string) {
+	footSegs := make([]vaxis.Segment, 0, len(conf.Scripts)*2)
 	footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
 
-	for _, c := range scripts {
+	for _, c := range conf.Scripts {
 		if len(footSegs) > 1 {
 			footSegs = append(footSegs, vaxis.Segment{Text: " "})
 		}
@@ -233,19 +229,26 @@ func drawFooter(win vaxis.Window, scripts []scriptConf, visGroups []string) {
 	win.Println(0, footSegs...)
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner.Model, st *scriptState, data map[string][]string, sconf scriptConf) error {
-	stop, ok := st.start(sconf.Name)
-	if !ok {
+type script struct {
+	scriptConf
+	running atomic.Bool
+	lines   []string
+}
+
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner.Model, script *script) error {
+	if !script.running.CompareAndSwap(false, true) {
 		return nil
 	}
-	defer stop()
+	defer func() {
+		script.running.Store(false)
+	}()
 
 	if spinner != nil {
 		spinner.Start()
 		defer spinner.Stop()
 	}
 
-	cmd := exec.CommandContext(ctx, sconf.Path)
+	cmd := exec.CommandContext(ctx, script.Path)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}
@@ -274,7 +277,7 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner.Model, st
 	}
 
 	vx.SyncFunc(func() {
-		data[sconf.Name] = lines
+		script.lines = lines
 	})
 
 	return nil
@@ -318,19 +321,4 @@ func clamp[T cmp.Ordered](v, mn, mx T) T {
 	v = max(v, mn)
 	v = min(v, mx)
 	return v
-}
-
-type scriptState struct {
-	states sync.Map
-}
-
-func (rm *scriptState) has(key string) bool {
-	_, ok := rm.states.Load(key)
-	return ok
-}
-
-func (rm *scriptState) start(key string) (func(), bool) {
-	value, _ := rm.states.LoadOrStore(key, &atomic.Bool{})
-	state := value.(*atomic.Bool)
-	return func() { state.Store(false) }, state.CompareAndSwap(false, true)
 }
