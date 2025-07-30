@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -78,9 +79,10 @@ func main() {
 	// state
 	type line struct{ group, text string }
 	var (
-		index     int
-		visGroups []string
-		visLines  []line
+		index          int
+		selectedGroups []string
+		visGroups      []string
+		visLines       []line
 	)
 
 	active := func() (int, scriptConf, string) {
@@ -137,24 +139,26 @@ func main() {
 
 		query := inpString
 
-		visGroups = visGroups[:0]
+		selectedGroups = selectedGroups[:0]
 		if left, rest, ok := strings.Cut(query, " "); ok {
 			for _, t := range config.Triggers {
 				if left == t.Key {
-					visGroups = append(visGroups, t.Scripts...)
+					selectedGroups = append(selectedGroups, t.Scripts...)
 					query = rest
 					break
 				}
 			}
 		}
-		if len(visGroups) == 0 {
+		if len(selectedGroups) == 0 {
 			for _, sconf := range config.Scripts {
-				visGroups = append(visGroups, sconf.Name)
+				selectedGroups = append(selectedGroups, sconf.Name)
 			}
 		}
 
 		visLines = visLines[:0]
-		for _, g := range visGroups {
+		visGroups = visGroups[:0]
+
+		for _, g := range selectedGroups {
 			sconf := scriptByName[g]
 			for i, item := range data[g] {
 				if inpString == "" && i >= sconf.Preview {
@@ -162,6 +166,7 @@ func main() {
 				}
 				if strings.Contains(item, query) {
 					visLines = append(visLines, line{group: g, text: item})
+					visGroups = append(visGroups, g)
 				}
 			}
 		}
@@ -169,12 +174,29 @@ func main() {
 		inpWin := win.New(0, 0, width, 1)
 		inp.Draw(inpWin)
 
-		listWin := win.New(0, 1, width, height-1)
+		spinWin := win.New(0, 0, 1, 1)
+		spinner.Draw(spinWin)
+
+		listWin := win.New(0, 1, width, height-2)
 		for i, it := range visLines {
 			drawLine(listWin, i, scriptByName[it.group], it.text, i == index)
 		}
 
-		spinner.Draw(win)
+		footWin := win.New(0, height-1, width, 1)
+		footSegs := make([]vaxis.Segment, 0, len(config.Scripts)*2)
+		footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
+
+		for _, c := range config.Scripts {
+			if len(footSegs) > 1 {
+				footSegs = append(footSegs, vaxis.Segment{Text: " "})
+			}
+			var style = vaxis.Style{Foreground: vaxis.ColorBlack}
+			if slices.Contains(visGroups, c.Name) {
+				style = vaxis.Style{}
+			}
+			footSegs = append(footSegs, vaxis.Segment{Text: c.Name, Style: style})
+		}
+		footWin.Println(0, footSegs...)
 
 		vx.Render()
 	}
