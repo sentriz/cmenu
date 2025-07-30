@@ -28,8 +28,17 @@ func main() {
 		panic(err)
 	}
 
-	scriptByName := make(map[string]scriptConf, len(config.Scripts))
-	for _, s := range config.Scripts {
+	scripts := config.Scripts
+
+	var triggers = map[string][]string{}
+	for _, s := range scripts {
+		for i, key := range s.Triggers {
+			triggers[key] = slices.Insert(triggers[key], clamp(i, 0, len(triggers[key])), s.Name)
+		}
+	}
+
+	scriptByName := make(map[string]scriptConf, len(scripts))
+	for _, s := range scripts {
 		scriptByName[s.Name] = s
 	}
 
@@ -49,6 +58,7 @@ func main() {
 	inp := textinput.
 		New().
 		SetPrompt("> ")
+	inp.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
 
 	var (
 		data = map[string][]string{}
@@ -59,7 +69,7 @@ func main() {
 		defer spinner.Stop()
 
 		var wg sync.WaitGroup
-		for _, sc := range config.Scripts {
+		for _, sc := range scripts {
 			if sc.Preview == 0 {
 				continue
 			}
@@ -141,16 +151,13 @@ func main() {
 
 		selectedGroups = selectedGroups[:0]
 		if left, rest, ok := strings.Cut(query, " "); ok {
-			for _, t := range config.Triggers {
-				if left == t.Key {
-					selectedGroups = append(selectedGroups, t.Scripts...)
-					query = rest
-					break
-				}
+			if groups := triggers[left]; len(groups) > 0 {
+				selectedGroups = append(selectedGroups, groups...)
+				query = rest
 			}
 		}
 		if len(selectedGroups) == 0 {
-			for _, sconf := range config.Scripts {
+			for _, sconf := range scripts {
 				selectedGroups = append(selectedGroups, sconf.Name)
 			}
 		}
@@ -183,10 +190,10 @@ func main() {
 		}
 
 		footWin := win.New(0, height-1, width, 1)
-		footSegs := make([]vaxis.Segment, 0, len(config.Scripts)*2)
+		footSegs := make([]vaxis.Segment, 0, len(scripts)*2)
 		footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
 
-		for _, c := range config.Scripts {
+		for _, c := range scripts {
 			if len(footSegs) > 1 {
 				footSegs = append(footSegs, vaxis.Segment{Text: " "})
 			}
@@ -258,15 +265,15 @@ func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, text 
 }
 
 type config struct {
-	Scripts  []scriptConf
-	Triggers []triggerConf
+	Scripts []scriptConf
 }
 
 type scriptConf struct {
-	Name    string
-	Path    string
-	Preview int
-	Colour  int
+	Triggers []string
+	Name     string
+	Path     string
+	Preview  int
+	Colour   int
 }
 
 type triggerConf struct {

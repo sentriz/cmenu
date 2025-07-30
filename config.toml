@@ -1,29 +1,19 @@
-[[triggers]]
-  key = "a"
-  scripts = ["pulse", "bluetooth"]
-
-[[triggers]]
-  key = "b"
-  scripts = ["bluetooth", "pulse"]
-
-[[triggers]]
-  key = "p"
-  scripts = ["package"]
-
-
 [[scripts]]
+  triggers = ["b", "a"]
   name = "bluetooth"
   path = "scripts/dmenu-bluetooth"
   preview = 2
   colour = 4
 
 [[scripts]]
+  triggers = ["a", "b"]
   name = "pulse"
   path = "scripts/dmenu-pulse"
   preview = 2
   colour = 6
 
 [[scripts]]
+  triggers = ["p"]
   name = "package"
   path = "scripts/dmenu-package"
   preview = 5
