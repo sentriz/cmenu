@@ -276,11 +276,6 @@ type scriptConf struct {
 	Colour   int
 }
 
-type triggerConf struct {
-	Key     string
-	Scripts []string
-}
-
 func parseConfig(path string) (config, error) {
 	configFile, err := os.Open(path)
 	if err != nil {
