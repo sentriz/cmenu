@@ -171,14 +171,19 @@ func main() {
 
 		for _, s := range selectedScripts {
 			script := scripts[s]
+
+			var scriptVisible bool
 			for i, item := range script.lines {
 				if inpString == "" && i >= script.Preview {
 					break
 				}
 				if strings.Contains(item, query) {
 					visLines = append(visLines, line{script: s, text: item})
-					visScripts = append(visScripts, s)
+					scriptVisible = true
 				}
+			}
+			if scriptVisible {
+				visScripts = append(visScripts, s)
 			}
 		}
 
@@ -211,7 +216,7 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	)
 }
 
-func drawFooter(win vaxis.Window, conf config, visGroups []string) {
+func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 	footSegs := make([]vaxis.Segment, 0, len(conf.Scripts)*2)
 	footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
 
@@ -220,7 +225,7 @@ func drawFooter(win vaxis.Window, conf config, visGroups []string) {
 			footSegs = append(footSegs, vaxis.Segment{Text: " "})
 		}
 		var style = vaxis.Style{Foreground: vaxis.ColorBlack}
-		if slices.Contains(visGroups, c.Name) {
+		if slices.Contains(visScripts, c.Name) {
 			style = vaxis.Style{}
 		}
 		footSegs = append(footSegs, vaxis.Segment{Text: c.Name, Style: style})
