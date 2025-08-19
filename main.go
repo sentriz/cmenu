@@ -226,7 +226,7 @@ func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 		}
 		var style = vaxis.Style{Foreground: vaxis.ColorBlack}
 		if slices.Contains(visScripts, c.Name) {
-			style = vaxis.Style{}
+			style = vaxis.Style{UnderlineStyle: vaxis.UnderlineSingle}
 		}
 		footSegs = append(footSegs, vaxis.Segment{Text: c.Name, Style: style})
 	}
