@@ -53,7 +53,7 @@ func main() {
 	defer cancel()
 
 	// elements
-	spinner := spinner.New(vx, 100*time.Millisecond)
+	spinner := newCountSpinner(vx, 100*time.Millisecond)
 	spinner.Frames = []rune("▌▀▐▄")
 
 	inp := textinput.
@@ -240,7 +240,7 @@ type script struct {
 	lines   []string
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner.Model, script *script) error {
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *countSpinner, script *script) error {
 	if !script.running.CompareAndSwap(false, true) {
 		return nil
 	}
@@ -326,4 +326,26 @@ func clamp[T cmp.Ordered](v, mn, mx T) T {
 	v = max(v, mn)
 	v = min(v, mx)
 	return v
+}
+
+type countSpinner struct {
+	*spinner.Model
+	count atomic.Int32
+}
+
+func newCountSpinner(vx *vaxis.Vaxis, duration time.Duration) *countSpinner {
+	s := spinner.New(vx, duration)
+	return &countSpinner{Model: s}
+}
+
+func (s *countSpinner) Start() {
+	if s.count.Add(1) == 1 {
+		s.Model.Start()
+	}
+}
+
+func (s *countSpinner) Stop() {
+	if s.count.Add(-1) == 0 {
+		s.Model.Stop()
+	}
 }
