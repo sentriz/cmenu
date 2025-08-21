@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"os"
@@ -18,12 +17,16 @@ import (
 	"git.sr.ht/~rockorager/vaxis/widgets/spinner"
 	"git.sr.ht/~rockorager/vaxis/widgets/textinput"
 	"github.com/BurntSushi/toml"
+	"go.senan.xyz/table/table"
 )
 
-func main() {
-	lf, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
-	_ = lf
+var lf *os.File
 
+func init() {
+	lf, _ = os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+}
+
+func main() {
 	conf, err := parseConfig("config.toml")
 	if err != nil {
 		panic(err)
@@ -267,16 +270,11 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *countSpinner, scr
 		return err
 	}
 
-	sc := bufio.NewScanner(stdout)
-
-	var lines []string
-	for sc.Scan() {
-		lines = append(lines, sc.Text())
-	}
-
-	if err := sc.Err(); err != nil {
+	lines, err := table.FormatReader(stdout)
+	if err != nil {
 		return err
 	}
+
 	if err := cmd.Wait(); err != nil {
 		return err
 	}
