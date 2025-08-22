@@ -17,7 +17,7 @@ import (
 	"git.sr.ht/~rockorager/vaxis/widgets/spinner"
 	"git.sr.ht/~rockorager/vaxis/widgets/textinput"
 	"github.com/BurntSushi/toml"
-	"go.senan.xyz/table/table"
+	"go.senan.xyz/table"
 )
 
 var lf *os.File

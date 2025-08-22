@@ -19,8 +19,8 @@ github.com/soniakeys/quant v1.0.0 h1:N1um9ktjbkZVcywBVAAYpZYSHxEfJGzshHCxx/DaI0Y
 github.com/soniakeys/quant v1.0.0/go.mod h1:HI1k023QuVbD4H8i9YdfZP2munIHU4QpjsImz6Y6zds=
 github.com/stretchr/testify v1.8.3 h1:RP3t2pwF7cMEbC1dqtB6poj3niw/9gnV4Cjg5oW5gtY=
 github.com/stretchr/testify v1.8.3/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
-go.senan.xyz/table v0.0.0-20250821175445-efb0ef03d3fb h1:QcxyxyUJ7TSjNkA1SWzrHzTszVNryq3/VH47tywEdX0=
-go.senan.xyz/table v0.0.0-20250821175445-efb0ef03d3fb/go.mod h1:FKya72hx1CWsohl2mArYink1gVpJpku1WtyK5wRn2qY=
+go.senan.xyz/table v0.0.0-20250822114859-74e687aa9b0c h1:0+Ss3lBYA+z7kiAT4oz/bQQ7Bk18Za09lkajOlvgqSE=
+go.senan.xyz/table v0.0.0-20250822114859-74e687aa9b0c/go.mod h1:FKya72hx1CWsohl2mArYink1gVpJpku1WtyK5wRn2qY=
 golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b h1:DXr+pvt3nC887026GRP39Ej11UATqWDmWuS99x26cD0=
 golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b/go.mod h1:4QTo5u+SEIbbKW1RacMZq1YEfOBqeXa19JeshGi+zc4=
 golang.org/x/image v0.30.0 h1:jD5RhkmVAnjqaCUXfbGBrn3lpxbknfN9w2UhHHU+5B4=
