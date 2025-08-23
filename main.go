@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"cmp"
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,13 +20,16 @@ import (
 	"git.sr.ht/~rockorager/vaxis/widgets/spinner"
 	"git.sr.ht/~rockorager/vaxis/widgets/textinput"
 	"github.com/BurntSushi/toml"
-	"go.senan.xyz/table"
 )
 
-var lf *os.File
-
 func init() {
-	lf, _ = os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+	logHandler := slog.DiscardHandler
+	if true {
+		logFile, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
+		logHandler = slog.NewJSONHandler(logFile, nil)
+	}
+	logger := slog.New(logHandler)
+	slog.SetDefault(logger)
 }
 
 func main() {
@@ -180,7 +186,7 @@ func main() {
 				if inpString == "" && i >= script.Preview {
 					break
 				}
-				if strings.Contains(item, query) {
+				if match(item, query) {
 					visLines = append(visLines, line{script: s, text: item})
 					scriptVisible = true
 				}
@@ -271,8 +277,13 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *countSpinner, scr
 		return err
 	}
 
-	lines, err := table.FormatReader(stdout)
-	if err != nil {
+	var lines []string
+
+	sc := bufio.NewScanner(stdout)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if err := sc.Err(); err != nil {
 		return err
 	}
 
@@ -325,6 +336,12 @@ func clamp[T cmp.Ordered](v, mn, mx T) T {
 	v = max(v, mn)
 	v = min(v, mx)
 	return v
+}
+
+func match(str, s string) bool {
+	str = strings.ToLower(str)
+	s = strings.ToLower(s)
+	return strings.Contains(str, s)
 }
 
 type countSpinner struct {
