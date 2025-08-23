@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	git.sr.ht/~rockorager/vaxis v0.15.0
 	github.com/BurntSushi/toml v1.5.0
-	go.senan.xyz/table v0.0.0-20250822114859-74e687aa9b0c
+	go.senan.xyz/table v0.0.0-20250823140814-89c73cfe037e
 )
 
 require (

@@ -215,7 +215,8 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	}
 	win.Println(i,
 		vaxis.Segment{Text: script.Name, Style: vaxis.Style{Background: vaxis.IndexColor(uint8(script.Colour))}},
-		vaxis.Segment{Text: " " + text, Style: style},
+		vaxis.Segment{Text: " "},
+		vaxis.Segment{Text: text, Style: style},
 	)
 }
 
