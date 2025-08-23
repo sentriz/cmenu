@@ -299,9 +299,15 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *countSpinner, scr
 }
 
 func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, text string) (err error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, scriptPath, text)
-	if err := cmd.Start(); err != nil {
-		return err
+
+	slog.InfoContext(ctx, "starting command", "args", cmd.Args)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w, output: %q", err, out)
 	}
 	return nil
 }
