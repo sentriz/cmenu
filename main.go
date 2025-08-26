@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"git.sr.ht/~rockorager/vaxis"
-	"git.sr.ht/~rockorager/vaxis/widgets/spinner"
+	vxspinner "git.sr.ht/~rockorager/vaxis/widgets/spinner"
 	"git.sr.ht/~rockorager/vaxis/widgets/textinput"
 	"github.com/BurntSushi/toml"
 )
@@ -63,8 +63,7 @@ func main() {
 	defer cancel()
 
 	// elements
-	spinner := newCountSpinner(vx, 100*time.Millisecond)
-	spinner.Frames = []rune("▌▀▐▄")
+	spinner := newSpinner(vx, 100*time.Millisecond, "▌▀▐▄")
 
 	inp := textinput.
 		New().
@@ -76,9 +75,9 @@ func main() {
 			continue
 		}
 
-		spinner.Start()
+		spinner.start()
 		go func() {
-			defer spinner.Stop()
+			defer spinner.stop()
 
 			if err := loadScript(ctx, vx, nil, sc); err != nil {
 				panic(err)
@@ -198,7 +197,7 @@ func main() {
 		inp.Draw(inpWin)
 
 		spinWin := win.New(0, 0, 1, 1)
-		spinner.Draw(spinWin)
+		spinner.draw(spinWin)
 
 		listWin := win.New(0, 1, width, height-2)
 		for i, it := range visLines {
@@ -252,7 +251,7 @@ type script struct {
 	lines   []string
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *countSpinner, script *script) error {
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *script) error {
 	if !script.running.CompareAndSwap(false, true) {
 		return nil
 	}
@@ -261,8 +260,8 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *countSpinner, scr
 	}()
 
 	if spinner != nil {
-		spinner.Start()
-		defer spinner.Stop()
+		spinner.start()
+		defer spinner.stop()
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -330,26 +329,33 @@ func match(str, s string) bool {
 	return strings.Contains(str, s)
 }
 
-type countSpinner struct {
-	*spinner.Model
+type spinner struct {
+	model *vxspinner.Model
 	count atomic.Int32
 }
 
-func newCountSpinner(vx *vaxis.Vaxis, duration time.Duration) *countSpinner {
-	s := spinner.New(vx, duration)
-	return &countSpinner{Model: s}
+func newSpinner(vx *vaxis.Vaxis, duration time.Duration, frames string) *spinner {
+	model := vxspinner.New(vx, duration)
+	model.Frames = []rune(frames)
+	return &spinner{
+		model: model,
+	}
 }
 
-func (s *countSpinner) Start() {
+func (s *spinner) start() {
 	if s.count.Add(1) == 1 {
-		s.Model.Start()
+		s.model.Start()
 	}
 }
 
-func (s *countSpinner) Stop() {
+func (s *spinner) stop() {
 	if s.count.Add(-1) == 0 {
-		s.Model.Stop()
+		s.model.Stop()
 	}
+}
+
+func (s *spinner) draw(w vaxis.Window) {
+	s.model.Draw(w)
 }
 
 type config struct {
