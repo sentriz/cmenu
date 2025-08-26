@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -219,6 +218,9 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	if selected {
 		style.Attribute = vaxis.AttrReverse
 	}
+
+	text = strings.ReplaceAll(text, "\t", " ")
+
 	win.Println(i,
 		vaxis.Segment{Text: script.Name, Style: vaxis.Style{Background: vaxis.IndexColor(uint8(script.Colour))}},
 		vaxis.Segment{Text: " "},
@@ -263,6 +265,9 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *countSpinner, scr
 		defer spinner.Stop()
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, script.Path)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
@@ -303,11 +308,12 @@ func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, text 
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, scriptPath, text)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	slog.InfoContext(ctx, "starting command", "args", cmd.Args)
 
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w, output: %q", err, out)
+	if err := cmd.Run(); err != nil {
+		return err
 	}
 	return nil
 }
