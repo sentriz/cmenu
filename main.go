@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -32,7 +34,8 @@ func init() {
 }
 
 func main() {
-	conf, err := parseConfig("config.toml")
+	configDir, _ := os.UserConfigDir()
+	conf, err := parseConfig(filepath.Join(configDir, "cmenu", "config.toml"))
 	if err != nil {
 		panic(err)
 	}
@@ -126,9 +129,9 @@ func main() {
 			case "Page_Down":
 			case "Page_Up":
 			case "Right":
-				_, script, _ := active()
+				_, sconf, _ := active()
 				go func() {
-					if err := loadScript(ctx, vx, spinner, script); err != nil {
+					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
 						panic(err)
 					}
 				}()
@@ -141,6 +144,11 @@ func main() {
 				if ev.Modifiers&vaxis.ModShift == 0 {
 					return
 				}
+				go func() {
+					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
+						panic(err)
+					}
+				}()
 			}
 		case vaxis.SyncFunc:
 			ev()
@@ -222,7 +230,8 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	text = strings.ReplaceAll(text, "\t", " ")
 
 	win.Println(i,
-		vaxis.Segment{Text: script.Name, Style: vaxis.Style{Background: vaxis.IndexColor(uint8(script.Colour))}},
+		vaxis.Segment{Text: fmt.Sprintf("%-*s", 10, script.Name)},
+		vaxis.Segment{Text: " ", Style: vaxis.Style{Foreground: vaxis.ColorBlack, Background: vaxis.IndexColor(uint8(script.Colour))}},
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
 	)
@@ -232,15 +241,15 @@ func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 	footSegs := make([]vaxis.Segment, 0, len(conf.Scripts)*2)
 	footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
 
-	for _, c := range conf.Scripts {
+	for _, sconf := range conf.Scripts {
 		if len(footSegs) > 1 {
 			footSegs = append(footSegs, vaxis.Segment{Text: " "})
 		}
 		var style = vaxis.Style{Foreground: vaxis.ColorBlack}
-		if slices.Contains(visScripts, c.Name) {
+		if slices.Contains(visScripts, sconf.Name) {
 			style = vaxis.Style{UnderlineStyle: vaxis.UnderlineSingle}
 		}
-		footSegs = append(footSegs, vaxis.Segment{Text: c.Name, Style: style})
+		footSegs = append(footSegs, vaxis.Segment{Text: sconf.Name, Style: style})
 	}
 
 	win.Println(0, footSegs...)
