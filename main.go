@@ -137,11 +137,10 @@ func main() {
 				}()
 			case "Enter", "Shift+Enter":
 				_, sconf, text := active()
-				if err := runScriptItem(context.Background(), vx, sconf.Path, text); err != nil {
+				if err := runScriptItem(ctx, vx, sconf, text); err != nil {
 					panic(err)
 				}
-				// only quit if shift is not held
-				if ev.Modifiers&vaxis.ModShift == 0 {
+				if !sconf.StayOpen && ev.Modifiers&vaxis.ModShift == 0 {
 					return
 				}
 				go func() {
@@ -312,11 +311,11 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *countSpinner, scr
 	return nil
 }
 
-func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, text string) (err error) {
+func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, script *script, text string) (err error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, scriptPath, text)
+	cmd := exec.CommandContext(ctx, script.Path, text)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	slog.InfoContext(ctx, "starting command", "args", cmd.Args)
@@ -325,32 +324,6 @@ func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, scriptPath string, text 
 		return err
 	}
 	return nil
-}
-
-type config struct {
-	Scripts []scriptConf
-}
-
-type scriptConf struct {
-	Triggers []string
-	Name     string
-	Path     string
-	Preview  int
-	Colour   int
-}
-
-func parseConfig(path string) (config, error) {
-	configFile, err := os.Open(path)
-	if err != nil {
-		return config{}, err
-	}
-
-	var conf config
-	if _, err := toml.NewDecoder(configFile).Decode(&conf); err != nil {
-		return config{}, err
-	}
-
-	return conf, nil
 }
 
 func clamp[T cmp.Ordered](v, mn, mx T) T {
@@ -385,4 +358,31 @@ func (s *countSpinner) Stop() {
 	if s.count.Add(-1) == 0 {
 		s.Model.Stop()
 	}
+}
+
+type config struct {
+	Scripts []scriptConf `toml:"scripts"`
+}
+
+type scriptConf struct {
+	Triggers []string `toml:"triggers"`
+	Name     string   `toml:"name"`
+	Path     string   `toml:"path"`
+	Preview  int      `toml:"preview"`
+	Colour   int      `toml:"colour"`
+	StayOpen bool     `toml:"stay_open"`
+}
+
+func parseConfig(path string) (config, error) {
+	configFile, err := os.Open(path)
+	if err != nil {
+		return config{}, err
+	}
+
+	var conf config
+	if _, err := toml.NewDecoder(configFile).Decode(&conf); err != nil {
+		return config{}, err
+	}
+
+	return conf, nil
 }
