@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -72,27 +71,20 @@ func main() {
 		SetPrompt("> ")
 	inp.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
 
-	spinner.Start()
-	go func() {
-		defer spinner.Stop()
-
-		var wg sync.WaitGroup
-		for _, sc := range scripts {
-			if sc.Preview == 0 {
-				continue
-			}
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := loadScript(ctx, vx, nil, sc); err != nil {
-					panic(err)
-				}
-			}()
+	for _, sc := range scripts {
+		if sc.Preview == 0 {
+			continue
 		}
 
-		wg.Wait()
-	}()
+		spinner.Start()
+		go func() {
+			defer spinner.Stop()
+
+			if err := loadScript(ctx, vx, nil, sc); err != nil {
+				panic(err)
+			}
+		}()
+	}
 
 	// state
 	type line struct{ script, text string }
