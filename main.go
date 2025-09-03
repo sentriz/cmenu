@@ -217,7 +217,18 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 		style.Attribute = vaxis.AttrReverse
 	}
 
-	text = strings.ReplaceAll(text, "\t", " ")
+	if len(script.Columns) > 0 {
+		columns := strings.Split(text, "\t")
+		filtered := make([]string, 0, len(columns))
+		for _, c := range script.Columns { // 1 indexed display columns
+			if i := c - 1; i <= len(columns)-1 {
+				filtered = append(filtered, columns[i])
+			}
+		}
+		text = strings.Join(filtered, " ")
+	} else {
+		text = strings.ReplaceAll(text, "\t", " ")
+	}
 
 	win.Println(i,
 		vaxis.Segment{Text: fmt.Sprintf("%-*s", 10, script.Name)},
@@ -369,6 +380,7 @@ type scriptConf struct {
 	Preview  int      `toml:"preview"`
 	Colour   int      `toml:"colour"`
 	StayOpen bool     `toml:"stay_open"`
+	Columns  []int    `toml:"columns"`
 }
 
 func parseConfig(path string) (config, error) {
