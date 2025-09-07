@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -24,7 +25,7 @@ import (
 
 func init() {
 	logHandler := slog.DiscardHandler
-	if true {
+	if ok, _ := strconv.ParseBool(os.Getenv("CMENU_DEBUG")); ok {
 		logFile, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
 		logHandler = slog.NewJSONHandler(logFile, nil)
 	}
