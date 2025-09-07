@@ -128,18 +128,22 @@ func main() {
 				}()
 			case "Enter", "Shift+Enter":
 				_, sconf, text := active()
-				if err := runScriptItem(ctx, vx, sconf, text); err != nil {
-					panic(err)
-				}
-				if !sconf.StayOpen && ev.Modifiers&vaxis.ModShift == 0 {
-					return
-				}
+				stayOpen := sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				go func() {
+					if err := runScriptItem(ctx, vx, spinner, sconf, text); err != nil {
+						panic(err)
+					}
+					if !stayOpen {
+						vx.PostEvent(vaxis.QuitEvent{})
+						return
+					}
 					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
 						panic(err)
 					}
 				}()
 			}
+		case vaxis.QuitEvent:
+			return
 		case vaxis.SyncFunc:
 			ev()
 		}
@@ -313,9 +317,18 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *
 	return nil
 }
 
-func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, script *script, text string) (err error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
+func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, spinner *spinner, script *script, text string) (err error) {
+	if !script.running.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer func() {
+		script.running.Store(false)
+	}()
+
+	if spinner != nil {
+		spinner.start()
+		defer spinner.stop()
+	}
 
 	cmd := exec.CommandContext(ctx, script.Path, text)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
