@@ -100,6 +100,21 @@ func main() {
 		return index, sconf, item.text
 	}
 
+	siblings := func(sconf *script) []*script {
+		var sib []*script
+		for _, trigScripts := range triggers {
+			if slices.Contains(trigScripts, sconf.Name) {
+				for _, trigScript := range trigScripts {
+					if trigScript != sconf.Name {
+						sib = append(sib, scripts[trigScript])
+					}
+				}
+				break
+			}
+		}
+		return sib
+	}
+
 	for ev := range vx.Events() {
 		win := vx.Window()
 		win.Clear()
@@ -139,6 +154,11 @@ func main() {
 					}
 					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
 						panic(err)
+					}
+					for _, sconf := range siblings(sconf) {
+						if err := loadScript(ctx, vx, spinner, sconf); err != nil {
+							panic(err)
+						}
 					}
 				}()
 			}
