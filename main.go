@@ -5,13 +5,11 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -23,21 +21,20 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-func init() {
-	logHandler := slog.DiscardHandler
-	if ok, _ := strconv.ParseBool(os.Getenv("CMENU_DEBUG")); ok {
-		logFile, _ := os.OpenFile("/tmp/cm", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.ModePerm)
-		logHandler = slog.NewJSONHandler(logFile, nil)
-	}
-	logger := slog.New(logHandler)
-	slog.SetDefault(logger)
-}
-
 func main() {
+	var quitErr error
+	defer func() {
+		if quitErr != nil {
+			fmt.Println(quitErr)
+			os.Exit(1)
+		}
+	}()
+
 	configDir, _ := os.UserConfigDir()
 	conf, err := parseConfig(filepath.Join(configDir, "cmenu", "config.toml"))
 	if err != nil {
-		panic(err)
+		quitErr = err
+		return
 	}
 
 	var scriptKeys []string
@@ -56,7 +53,8 @@ func main() {
 
 	vx, err := vaxis.New(vaxis.Options{})
 	if err != nil {
-		panic(err)
+		quitErr = err
+		return
 	}
 	defer vx.Close()
 
@@ -81,7 +79,8 @@ func main() {
 			defer spinner.stop()
 
 			if err := loadScript(ctx, vx, nil, sc); err != nil {
-				panic(err)
+				vx.PostEvent(eventQuitError(err))
+				return
 			}
 		}()
 	}
@@ -139,7 +138,8 @@ func main() {
 				_, sconf, _ := active()
 				go func() {
 					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
-						panic(err)
+						vx.PostEvent(eventQuitError(err))
+						return
 					}
 				}()
 			case "Enter", "Shift+Enter":
@@ -147,23 +147,29 @@ func main() {
 				stayOpen := sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				go func() {
 					if err := runScriptItem(ctx, vx, spinner, sconf, text); err != nil {
-						panic(err)
+						vx.PostEvent(eventQuitError(err))
+						return
 					}
 					if !stayOpen {
 						vx.PostEvent(vaxis.QuitEvent{})
 						return
 					}
 					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
-						panic(err)
+						vx.PostEvent(eventQuitError(err))
+						return
 					}
 					for _, sconf := range siblings(sconf) {
 						if err := loadScript(ctx, vx, spinner, sconf); err != nil {
-							panic(err)
+							vx.PostEvent(eventQuitError(err))
+							return
 						}
 					}
 				}()
 			}
 		case vaxis.QuitEvent:
+			return
+		case eventQuitError:
+			quitErr = ev
 			return
 		case vaxis.SyncFunc:
 			ev()
@@ -190,7 +196,8 @@ func main() {
 				if script := scripts[s]; len(script.lines) == 0 {
 					go func() {
 						if err := loadScript(ctx, vx, spinner, script); err != nil {
-							panic(err)
+							vx.PostEvent(eventQuitError(err))
+							return
 						}
 					}()
 				}
@@ -235,6 +242,8 @@ func main() {
 		vx.Render()
 	}
 }
+
+type eventQuitError error
 
 func drawLine(win vaxis.Window, i int, script *script, text string, selected bool) {
 	var style vaxis.Style
@@ -354,10 +363,8 @@ func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, spinner *spinner, script
 	cmd := exec.CommandContext(ctx, script.Path, text)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	slog.InfoContext(ctx, "starting command", "args", cmd.Args)
-
 	if err := cmd.Run(); err != nil {
-		return err
+		return fmt.Errorf("error running command: %w", err)
 	}
 	return nil
 }
