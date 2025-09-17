@@ -188,9 +188,7 @@ func main() {
 			}
 		}
 		if len(selectedScripts) == 0 {
-			for _, s := range scriptKeys {
-				selectedScripts = append(selectedScripts, s)
-			}
+			selectedScripts = append(selectedScripts, scriptKeys...)
 		} else {
 			for _, s := range selectedScripts {
 				if script := scripts[s]; len(script.lines) == 0 {
