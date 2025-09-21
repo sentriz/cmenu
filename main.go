@@ -69,8 +69,8 @@ func main() {
 		SetPrompt("> ")
 	inp.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
 
-	for _, sc := range scripts {
-		if sc.Preview == 0 {
+	for _, sconf := range scripts {
+		if sconf.Preview == 0 {
 			continue
 		}
 
@@ -78,8 +78,8 @@ func main() {
 		go func() {
 			defer spinner.stop()
 
-			if err := loadScript(ctx, vx, nil, sc); err != nil {
-				vx.PostEvent(eventQuitError(err))
+			if err := loadScript(ctx, vx, nil, sconf); err != nil {
+				vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 				return
 			}
 		}()
@@ -138,7 +138,7 @@ func main() {
 				_, sconf, _ := active()
 				go func() {
 					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
-						vx.PostEvent(eventQuitError(err))
+						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 						return
 					}
 				}()
@@ -147,7 +147,7 @@ func main() {
 				stayOpen := sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				go func() {
 					if err := runScriptItem(ctx, vx, spinner, sconf, text); err != nil {
-						vx.PostEvent(eventQuitError(err))
+						vx.PostEvent(quitErrorf("run script item for %q: %w", sconf.Name, err))
 						return
 					}
 					if !stayOpen {
@@ -155,12 +155,12 @@ func main() {
 						return
 					}
 					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
-						vx.PostEvent(eventQuitError(err))
+						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 						return
 					}
 					for _, sconf := range siblings(sconf) {
 						if err := loadScript(ctx, vx, spinner, sconf); err != nil {
-							vx.PostEvent(eventQuitError(err))
+							vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 							return
 						}
 					}
@@ -242,6 +242,10 @@ func main() {
 }
 
 type eventQuitError error
+
+func quitErrorf(f string, a ...any) error {
+	return eventQuitError(fmt.Errorf(f, a...))
+}
 
 func drawLine(win vaxis.Window, i int, script *script, text string, selected bool) {
 	var style vaxis.Style
