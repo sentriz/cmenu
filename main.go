@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -84,6 +85,21 @@ func main() {
 			}
 		}()
 	}
+
+	// periodic redraws to check intervals
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				vx.PostEvent(vaxis.Redraw{})
+			}
+		}
+	}()
 
 	// state
 	type line struct{ script, text string }
@@ -190,6 +206,7 @@ func main() {
 		if len(selectedScripts) == 0 {
 			selectedScripts = append(selectedScripts, scriptKeys...)
 		} else {
+			// load initial scripts
 			for _, s := range selectedScripts {
 				if script := scripts[s]; len(script.lines) == 0 {
 					go func() {
@@ -220,6 +237,23 @@ func main() {
 			}
 			if scriptVisible {
 				visScripts = append(visScripts, s)
+			}
+		}
+
+		for _, s := range visScripts {
+			if script := scripts[s]; script.Interval > 0 {
+				script.mu.Lock()
+				lastLoaded := script.lastLoaded
+				script.mu.Unlock()
+
+				if !lastLoaded.IsZero() && time.Since(lastLoaded) >= script.Interval {
+					go func() {
+						if err := loadScript(ctx, vx, nil, script); err != nil {
+							vx.PostEvent(eventQuitError(err))
+							return
+						}
+					}()
+				}
 			}
 		}
 
@@ -294,16 +328,25 @@ func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 
 type script struct {
 	scriptConf
-	running atomic.Bool
-	lines   []string
+	mu         sync.Mutex
+	running    bool
+	lastLoaded time.Time
+	lines      []string
 }
 
 func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *script) error {
-	if !script.running.CompareAndSwap(false, true) {
+	script.mu.Lock()
+	if script.running {
+		script.mu.Unlock()
 		return nil
 	}
+	script.running = true
+	script.mu.Unlock()
+
 	defer func() {
-		script.running.Store(false)
+		script.mu.Lock()
+		script.running = false
+		script.mu.Unlock()
 	}()
 
 	if spinner != nil {
@@ -343,18 +386,28 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *
 	}
 
 	vx.SyncFunc(func() {
+		script.mu.Lock()
 		script.lines = lines
+		script.lastLoaded = time.Now()
+		script.mu.Unlock()
 	})
 
 	return nil
 }
 
 func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, spinner *spinner, script *script, text string) (err error) {
-	if !script.running.CompareAndSwap(false, true) {
+	script.mu.Lock()
+	if script.running {
+		script.mu.Unlock()
 		return nil
 	}
+	script.running = true
+	script.mu.Unlock()
+
 	defer func() {
-		script.running.Store(false)
+		script.mu.Lock()
+		script.running = false
+		script.mu.Unlock()
 	}()
 
 	if spinner != nil {
@@ -417,13 +470,14 @@ type config struct {
 }
 
 type scriptConf struct {
-	Triggers []string `toml:"triggers"`
-	Name     string   `toml:"name"`
-	Path     string   `toml:"path"`
-	Preview  int      `toml:"preview"`
-	Colour   int      `toml:"colour"`
-	StayOpen bool     `toml:"stay_open"`
-	Columns  []int    `toml:"columns"`
+	Triggers []string      `toml:"triggers"`
+	Name     string        `toml:"name"`
+	Path     string        `toml:"path"`
+	Preview  int           `toml:"preview"`
+	Colour   int           `toml:"colour"`
+	StayOpen bool          `toml:"stay_open"`
+	Columns  []int         `toml:"columns"`
+	Interval time.Duration `toml:"interval"`
 }
 
 func parseConfig(path string) (config, error) {
