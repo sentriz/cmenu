@@ -160,6 +160,7 @@ func main() {
 				}()
 			case "Enter", "Shift+Enter":
 				_, sconf, text := active()
+				text, _ = parseLineStyle(text)
 				stayOpen := sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				go func() {
 					if err := runScriptItem(ctx, vx, spinner, sconf, text); err != nil {
@@ -282,9 +283,15 @@ func quitErrorf(f string, a ...any) error {
 }
 
 func drawLine(win vaxis.Window, i int, script *script, text string, selected bool) {
+	text, lineStyle := parseLineStyle(text)
+
 	var style vaxis.Style
 	if selected {
 		style.Attribute = vaxis.AttrReverse
+	}
+	if lineStyle.highlight {
+		style.Attribute |= vaxis.AttrBold
+		style.Foreground = vaxis.IndexColor(uint8(script.Colour))
 	}
 
 	if len(script.Columns) > 0 {
@@ -431,9 +438,34 @@ func clamp[T cmp.Ordered](v, mn, mx T) T {
 }
 
 func match(str, s string) bool {
+	str, _ = parseLineStyle(str)
 	str = strings.ToLower(str)
 	s = strings.ToLower(s)
 	return strings.Contains(str, s)
+}
+
+type lineStyle struct {
+	highlight bool
+}
+
+// escape code is 6366, or the first 4 numbers of ASCII "cmenu" in hex
+const oscPrefix = "\x1b]6366;"
+
+func parseLineStyle(raw string) (text string, style lineStyle) {
+	text = raw
+	for strings.HasPrefix(text, oscPrefix) {
+		end := strings.Index(text, "\x07")
+		if end == -1 {
+			break
+		}
+		option := text[len(oscPrefix):end]
+		text = text[end+1:]
+		switch option {
+		case "highlight":
+			style.highlight = true
+		}
+	}
+	return text, style
 }
 
 type spinner struct {
