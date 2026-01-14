@@ -285,15 +285,6 @@ func quitErrorf(f string, a ...any) error {
 func drawLine(win vaxis.Window, i int, script *script, text string, selected bool) {
 	text, lineStyle := parseLineStyle(text)
 
-	var style vaxis.Style
-	if selected {
-		style.Attribute = vaxis.AttrReverse
-	}
-	if lineStyle.highlight {
-		style.Attribute |= vaxis.AttrBold
-		style.Foreground = vaxis.IndexColor(uint8(script.Colour))
-	}
-
 	if len(script.Columns) > 0 {
 		columns := strings.Split(text, "\t")
 		filtered := make([]string, 0, len(columns))
@@ -307,9 +298,22 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 		text = strings.ReplaceAll(text, "\t", " ")
 	}
 
+	var col string = "▌"
+	if lineStyle.highlight {
+		col = "█"
+	}
+
+	var style vaxis.Style
+	if selected {
+		style.Attribute |= vaxis.AttrReverse
+	}
+	if lineStyle.highlight {
+		style.Attribute |= vaxis.AttrBold
+	}
+
 	win.Println(i,
 		vaxis.Segment{Text: fmt.Sprintf("%-*s", 10, script.Name)},
-		vaxis.Segment{Text: " ", Style: vaxis.Style{Foreground: vaxis.ColorBlack, Background: vaxis.IndexColor(uint8(script.Colour))}},
+		vaxis.Segment{Text: col, Style: vaxis.Style{Foreground: vaxis.IndexColor(uint8(script.Colour))}},
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
 	)
