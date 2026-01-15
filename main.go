@@ -312,7 +312,7 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	}
 
 	win.Println(i,
-		vaxis.Segment{Text: fmt.Sprintf("%-*s", 10, script.Name)},
+		vaxis.Segment{Text: padRight(script.Name, " ", 10)},
 		vaxis.Segment{Text: col, Style: vaxis.Style{Foreground: vaxis.IndexColor(uint8(script.Colour))}},
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
@@ -499,6 +499,15 @@ func (s *spinner) stop() {
 
 func (s *spinner) draw(w vaxis.Window) {
 	s.model.Draw(w)
+}
+
+// avoiding fmt.Sprintf in a hot loop
+func padRight(s string, p string, width int) string {
+	gap := width - len(s)
+	if gap <= 0 {
+		return s
+	}
+	return s + strings.Repeat(p, gap)
 }
 
 type config struct {
