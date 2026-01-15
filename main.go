@@ -2,9 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -23,10 +27,29 @@ import (
 )
 
 func main() {
+	var slogWriter io.Writer = &bytes.Buffer{}
+	if logPath := os.Getenv("CMENU_LOG_PATH"); logPath != "" {
+		logFile, err := os.Create(logPath)
+		if err != nil {
+			panic(err)
+		}
+		slogWriter = logFile
+	}
+	{
+		slogHandler := slog.NewJSONHandler(slogWriter, nil)
+		slogLogger := slog.New(slogHandler)
+		slog.SetDefault(slogLogger)
+	}
+
 	var quitErr error
 	defer func() {
 		if quitErr != nil {
-			fmt.Println(quitErr)
+			slog.Error("quit due to error", "error", quitErr.Error())
+		}
+		if buf, ok := slogWriter.(*bytes.Buffer); ok {
+			io.Copy(os.Stderr, buf)
+		}
+		if quitErr != nil {
 			os.Exit(1)
 		}
 	}()
@@ -38,19 +61,50 @@ func main() {
 		return
 	}
 
-	var scriptKeys []string
-	var scripts = map[string]*script{}
-	var triggers = map[string][]string{}
-
+	var scriptKeys = make([]string, 0, len(conf.Scripts))
 	for _, sconf := range conf.Scripts {
 		scriptKeys = append(scriptKeys, sconf.Name)
-		scripts[sconf.Name] = &script{
-			scriptConf: sconf,
-		}
-		for i, key := range sconf.Triggers {
-			triggers[key] = slices.Insert(triggers[key], clamp(i, 0, len(triggers[key])), sconf.Name)
+	}
+
+	var scripts = map[string]*script{}
+	for _, sconf := range conf.Scripts {
+		scripts[sconf.Name] = &script{scriptConf: sconf}
+	}
+
+	var (
+		triggersOnStart  = map[ /* script name */ string]struct{}{}
+		triggersPrefix   = map[ /* prefix */ string] /* script names */ []string{}
+		triggersScript   = map[ /* script name */ string] /* script names */ []string{}
+		triggersInterval = map[ /* script name */ string]time.Duration{}
+	)
+	for _, sconf := range conf.Scripts {
+		for _, trigger := range sconf.Triggers {
+			switch typ, value, _ := strings.Cut(trigger, " "); typ {
+			case "on-start":
+				triggersOnStart[sconf.Name] = struct{}{}
+			case "pre":
+				triggersPrefix[value] = append(triggersPrefix[value], sconf.Name)
+			case "script":
+				triggersScript[sconf.Name] = append(triggersScript[sconf.Name], value)
+			case "interval":
+				triggersInterval[sconf.Name], err = time.ParseDuration(value)
+				if err != nil {
+					quitErr = fmt.Errorf("parse %q: parse duration: %w", sconf.Name, err)
+					return
+				}
+			default:
+				quitErr = fmt.Errorf("parse %q: unknown trigger type %q", sconf.Name, typ)
+				return
+			}
 		}
 	}
+
+	slog.Info("loaded triggers",
+		"on_start", slices.Collect(maps.Keys(triggersOnStart)),
+		"prefix", triggersPrefix,
+		"script", triggersScript,
+		"interval", triggersInterval,
+	)
 
 	vx, err := vaxis.New(vaxis.Options{})
 	if err != nil {
@@ -63,17 +117,15 @@ func main() {
 	defer cancel()
 
 	// elements
-	spinner := newSpinner(vx, 100*time.Millisecond, "▌▀▐▄")
+	spinner := newSpinner(vx, 125*time.Millisecond, "▌▀▐▄")
 
 	inp := textinput.
 		New().
 		SetPrompt("> ")
 	inp.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
 
-	for _, sconf := range scripts {
-		if sconf.Preview == 0 {
-			continue
-		}
+	for scriptName := range triggersOnStart {
+		sconf := scripts[scriptName]
 
 		spinner.start()
 		go func() {
@@ -114,21 +166,6 @@ func main() {
 		item := visLines[index]
 		sconf := scripts[item.script]
 		return index, sconf, item.text
-	}
-
-	siblings := func(sconf *script) []*script {
-		var sib []*script
-		for _, trigScripts := range triggers {
-			if slices.Contains(trigScripts, sconf.Name) {
-				for _, trigScript := range trigScripts {
-					if trigScript != sconf.Name {
-						sib = append(sib, scripts[trigScript])
-					}
-				}
-				break
-			}
-		}
-		return sib
 	}
 
 	for ev := range vx.Events() {
@@ -175,8 +212,8 @@ func main() {
 						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 						return
 					}
-					for _, sconf := range siblings(sconf) {
-						if err := loadScript(ctx, vx, spinner, sconf); err != nil {
+					for _, scriptName := range triggersScript[sconf.Name] {
+						if err := loadScript(ctx, vx, spinner, scripts[scriptName]); err != nil {
 							vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 							return
 						}
@@ -199,17 +236,20 @@ func main() {
 
 		selectedScripts = selectedScripts[:0]
 		if left, rest, ok := strings.Cut(query, " "); ok {
-			if s := triggers[left]; len(s) > 0 {
-				selectedScripts = append(selectedScripts, s...)
+			if scriptNames := triggersPrefix[left]; len(scriptNames) > 0 {
+				selectedScripts = append(selectedScripts, scriptNames...)
 				query = rest
 			}
+		}
+		for _, scriptName := range selectedScripts {
+			selectedScripts = append(selectedScripts, triggersScript[scriptName]...)
 		}
 		if len(selectedScripts) == 0 {
 			selectedScripts = append(selectedScripts, scriptKeys...)
 		} else {
-			// load initial scripts
-			for _, s := range selectedScripts {
-				if script := scripts[s]; len(script.lines) == 0 {
+			// load scripts which have now been triggered/selected which were not on-start
+			for _, scriptName := range selectedScripts {
+				if script := scripts[scriptName]; len(script.lines) == 0 {
 					go func() {
 						if err := loadScript(ctx, vx, spinner, script); err != nil {
 							vx.PostEvent(eventQuitError(err))
@@ -223,38 +263,40 @@ func main() {
 		visLines = visLines[:0]
 		visScripts = visScripts[:0]
 
-		for _, s := range selectedScripts {
-			script := scripts[s]
+		for _, scriptName := range selectedScripts {
+			script := scripts[scriptName]
 
 			var scriptVisible bool
-			for i, item := range script.lines {
-				if inpString == "" && i >= script.Preview {
-					break
-				}
-				if match(item, query) {
-					visLines = append(visLines, line{script: s, text: item})
+			for _, item := range script.lines {
+				if inpString == "" || match(item, query) {
+					visLines = append(visLines, line{script: scriptName, text: item})
 					scriptVisible = true
 				}
 			}
 			if scriptVisible {
-				visScripts = append(visScripts, s)
+				visScripts = append(visScripts, scriptName)
 			}
 		}
 
-		for _, s := range visScripts {
-			if script := scripts[s]; script.Interval > 0 {
-				script.mu.Lock()
-				lastLoaded := script.lastLoaded
-				script.mu.Unlock()
+		for _, scriptName := range visScripts {
+			inter := triggersInterval[scriptName]
+			if inter == 0 {
+				continue
+			}
 
-				if !lastLoaded.IsZero() && time.Since(lastLoaded) >= script.Interval {
-					go func() {
-						if err := loadScript(ctx, vx, nil, script); err != nil {
-							vx.PostEvent(eventQuitError(err))
-							return
-						}
-					}()
-				}
+			script := scripts[scriptName]
+
+			script.mu.Lock()
+			lastLoaded := script.lastLoaded
+			script.mu.Unlock()
+
+			if !lastLoaded.IsZero() && time.Since(lastLoaded) >= inter {
+				go func() {
+					if err := loadScript(ctx, vx, nil, script); err != nil {
+						vx.PostEvent(eventQuitError(err))
+						return
+					}
+				}()
 			}
 		}
 
@@ -396,6 +438,8 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *
 		return err
 	}
 
+	slog.InfoContext(ctx, "loaded script", "script", script.Name, "num_lines", len(lines))
+
 	vx.SyncFunc(func() {
 		script.mu.Lock()
 		script.lines = lines
@@ -515,14 +559,12 @@ type config struct {
 }
 
 type scriptConf struct {
-	Triggers []string      `toml:"triggers"`
-	Name     string        `toml:"name"`
-	Path     string        `toml:"path"`
-	Preview  int           `toml:"preview"`
-	Colour   int           `toml:"colour"`
-	StayOpen bool          `toml:"stay_open"`
-	Columns  []int         `toml:"columns"`
-	Interval time.Duration `toml:"interval"`
+	Triggers []string `toml:"triggers"`
+	Name     string   `toml:"name"`
+	Path     string   `toml:"path"`
+	Colour   int      `toml:"colour"`
+	StayOpen bool     `toml:"stay_open"`
+	Columns  []int    `toml:"columns"`
 }
 
 func parseConfig(path string) (config, error) {
