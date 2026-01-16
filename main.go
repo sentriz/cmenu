@@ -131,7 +131,7 @@ func main() {
 		go func() {
 			defer spinner.stop()
 
-			if err := loadScript(ctx, vx, nil, sconf); err != nil {
+			if err := runScript(ctx, vx, nil, sconf); err != nil {
 				vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 				return
 			}
@@ -190,7 +190,7 @@ func main() {
 			case "Right":
 				_, sconf, _ := active()
 				go func() {
-					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
+					if err := runScript(ctx, vx, spinner, sconf); err != nil {
 						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 						return
 					}
@@ -200,7 +200,7 @@ func main() {
 				text, _ = parseLineStyle(text)
 				stayOpen := sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				go func() {
-					if err := runScriptItem(ctx, vx, spinner, sconf, text); err != nil {
+					if err := runScript(ctx, vx, spinner, sconf, text); err != nil {
 						vx.PostEvent(quitErrorf("run script item for %q: %w", sconf.Name, err))
 						return
 					}
@@ -208,12 +208,12 @@ func main() {
 						vx.PostEvent(vaxis.QuitEvent{})
 						return
 					}
-					if err := loadScript(ctx, vx, spinner, sconf); err != nil {
+					if err := runScript(ctx, vx, spinner, sconf); err != nil {
 						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 						return
 					}
 					for _, scriptName := range triggersScript[sconf.Name] {
-						if err := loadScript(ctx, vx, spinner, scripts[scriptName]); err != nil {
+						if err := runScript(ctx, vx, spinner, scripts[scriptName]); err != nil {
 							vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 							return
 						}
@@ -251,7 +251,7 @@ func main() {
 			for _, scriptName := range selectedScripts {
 				if script := scripts[scriptName]; len(script.lines) == 0 {
 					go func() {
-						if err := loadScript(ctx, vx, spinner, script); err != nil {
+						if err := runScript(ctx, vx, spinner, script); err != nil {
 							vx.PostEvent(eventQuitError(err))
 							return
 						}
@@ -292,7 +292,7 @@ func main() {
 
 			if !lastLoaded.IsZero() && time.Since(lastLoaded) >= inter {
 				go func() {
-					if err := loadScript(ctx, vx, nil, script); err != nil {
+					if err := runScript(ctx, vx, nil, script); err != nil {
 						vx.PostEvent(eventQuitError(err))
 						return
 					}
@@ -387,7 +387,7 @@ type script struct {
 	lines      []string
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *script) error {
+func runScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *script, args ...string) error {
 	script.mu.Lock()
 	if script.running {
 		script.mu.Unlock()
@@ -410,7 +410,8 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, script.Path)
+	cmd := exec.CommandContext(ctx, script.Path, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}
@@ -442,40 +443,13 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *
 
 	vx.SyncFunc(func() {
 		script.mu.Lock()
-		script.lines = lines
+		if len(lines) > 0 {
+			script.lines = lines
+		}
 		script.lastLoaded = time.Now()
 		script.mu.Unlock()
 	})
 
-	return nil
-}
-
-func runScriptItem(ctx context.Context, _ *vaxis.Vaxis, spinner *spinner, script *script, text string) (err error) {
-	script.mu.Lock()
-	if script.running {
-		script.mu.Unlock()
-		return nil
-	}
-	script.running = true
-	script.mu.Unlock()
-
-	defer func() {
-		script.mu.Lock()
-		script.running = false
-		script.mu.Unlock()
-	}()
-
-	if spinner != nil {
-		spinner.start()
-		defer spinner.stop()
-	}
-
-	cmd := exec.CommandContext(ctx, script.Path, text)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("error running command: %w", err)
-	}
 	return nil
 }
 
