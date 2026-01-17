@@ -420,6 +420,8 @@ type script struct {
 }
 
 func runScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *script, query string, args ...string) error {
+	start := time.Now()
+
 	script.mu.Lock()
 	if script.running {
 		script.mu.Unlock()
@@ -474,7 +476,7 @@ func runScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *s
 		return err
 	}
 
-	slog.InfoContext(ctx, "loaded script", "script", script.Name, "num_lines", len(lines))
+	slog.InfoContext(ctx, "loaded script", "script", script.Name, "num_lines", len(lines), "took_ms", time.Since(start).Milliseconds())
 
 	vx.SyncFunc(func() {
 		script.mu.Lock()
