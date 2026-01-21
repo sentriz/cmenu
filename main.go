@@ -453,6 +453,13 @@ func runScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *s
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}
 
+	if len(args) > 0 {
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
