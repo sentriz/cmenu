@@ -73,7 +73,7 @@ func main() {
 		triggersPrefix   = map[ /* prefix */ string] /* script names */ []string{}
 		triggersScript   = map[ /* script name */ string] /* script names */ []string{}
 		triggersInterval = map[ /* script name */ string]time.Duration{}
-		triggersInput    = map[ /* script name */ string]struct{}{}
+		triggersInput    = map[ /* script name */ string]time.Duration{}
 	)
 	for _, sconf := range conf.Scripts {
 		for _, trigger := range sconf.Triggers {
@@ -91,7 +91,15 @@ func main() {
 					return
 				}
 			case "input":
-				triggersInput[sconf.Name] = struct{}{}
+				var delay = 100 * time.Millisecond
+				if value != "" {
+					delay, err = time.ParseDuration(value)
+					if err != nil {
+						quitErr = fmt.Errorf("parse %q: parse duration: %w", sconf.Name, err)
+						return
+					}
+				}
+				triggersInput[sconf.Name] = delay
 			default:
 				quitErr = fmt.Errorf("parse %q: unknown trigger type %q", sconf.Name, typ)
 				return
@@ -163,6 +171,7 @@ func main() {
 		selectedScripts []string
 		visScripts      []string
 		visLines        []line
+		inputTimers     = map[string]*time.Timer{}
 	)
 
 	active := func() (int, *script, string) {
@@ -256,16 +265,21 @@ func main() {
 		// add input triggers
 		if query != prevQuery {
 			for _, scriptName := range selectedScripts {
-				if _, ok := triggersInput[scriptName]; !ok {
+				delay, ok := triggersInput[scriptName]
+				if !ok {
 					continue
 				}
+				if t := inputTimers[scriptName]; t != nil {
+					t.Stop()
+				}
 				script := scripts[scriptName]
-				go func() {
-					if err := runScript(ctx, vx, spinner, script, scriptQuery); err != nil {
+				q := scriptQuery
+				inputTimers[scriptName] = time.AfterFunc(delay, func() {
+					if err := runScript(ctx, vx, spinner, script, q); err != nil {
 						vx.PostEvent(eventQuitError(err))
 						return
 					}
-				}()
+				})
 			}
 		}
 
