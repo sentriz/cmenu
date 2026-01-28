@@ -292,8 +292,11 @@ func main() {
 			}
 		}
 
-		// make sure all scripts have been invoked
+		// make sure all scripts have been invoked (except input-triggered scripts, which wait for debounce)
 		for _, scriptName := range selectedScripts {
+			if _, isInputTrigger := triggersInput[scriptName]; isInputTrigger {
+				continue
+			}
 			if script := scripts[scriptName]; len(script.lines) == 0 {
 				go func() {
 					if err := runScript(ctx, vx, spinner, script, scriptQuery); err != nil {
