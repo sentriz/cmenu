@@ -165,13 +165,15 @@ func main() {
 	// state
 	type line struct{ script, text string }
 	var (
-		index           int
-		query           string
-		scriptQuery     string
-		selectedScripts []string
-		visScripts      []string
-		visLines        []line
-		inputTimers     = map[string]*time.Timer{}
+		index              int
+		query              string
+		queryChangedAt     time.Time
+		scriptQuery        string
+		selectedScripts    []string
+		visScripts         []string
+		visLines           []line
+		inputTriggerCtx    context.Context
+		inputTriggerCancel func()
 	)
 
 	active := func() (int, *script, string) {
@@ -262,25 +264,16 @@ func main() {
 			}
 		}
 
-		// add input triggers
 		if query != prevQuery {
-			for _, scriptName := range selectedScripts {
-				delay, ok := triggersInput[scriptName]
-				if !ok {
-					continue
-				}
-				if t := inputTimers[scriptName]; t != nil {
-					t.Stop()
-				}
-				script := scripts[scriptName]
-				q := scriptQuery
-				inputTimers[scriptName] = time.AfterFunc(delay, func() {
-					if err := runScript(ctx, vx, spinner, script, q); err != nil {
-						vx.PostEvent(eventQuitError(err))
-						return
-					}
-				})
+			queryChangedAt = time.Now()
+		}
+
+		// cancel any running input scripts and reset debounce
+		if query != prevQuery {
+			if inputTriggerCancel != nil {
+				inputTriggerCancel()
 			}
+			inputTriggerCtx, inputTriggerCancel = context.WithCancel(ctx)
 		}
 
 		// fallback to start scripts
@@ -292,7 +285,7 @@ func main() {
 			}
 		}
 
-		// make sure all scripts have been invoked (except input-triggered scripts, which wait for debounce)
+		// invoke scripts that haven't been run yet (input scripts wait for debounce)
 		for _, scriptName := range selectedScripts {
 			if _, isInputTrigger := triggersInput[scriptName]; isInputTrigger {
 				continue
@@ -347,6 +340,26 @@ func main() {
 					}
 				}()
 			}
+		}
+
+		// run input triggers after debounce
+		for _, scriptName := range selectedScripts {
+			delay, ok := triggersInput[scriptName]
+			if !ok {
+				continue
+			}
+			if queryChangedAt.IsZero() || time.Since(queryChangedAt) < delay {
+				continue
+			}
+			queryChangedAt = time.Time{}
+
+			scriptQuery, inputTriggerCtx := scriptQuery, inputTriggerCtx
+			go func() {
+				if err := runScript(inputTriggerCtx, vx, spinner, scripts[scriptName], scriptQuery); err != nil && inputTriggerCtx.Err() == nil {
+					vx.PostEvent(eventQuitError(err))
+					return
+				}
+			}()
 		}
 
 		inpWin := win.New(0, 0, width, 1)
@@ -467,8 +480,9 @@ func runScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *s
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		return cmd.Process.Signal(syscall.SIGTERM)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	}
+	cmd.WaitDelay = 100 * time.Millisecond
 
 	if len(args) > 0 {
 		if err := cmd.Run(); err != nil {
