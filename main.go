@@ -213,6 +213,7 @@ func main() {
 				_, sconf, text := active()
 				text, _ = parseLineStyle(text)
 				stayOpen := sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
+				_, isInputTrigger := triggersInput[sconf.Name]
 				go func() {
 					if err := runScript(ctx, vx, spinner, sconf, scriptQuery, text); err != nil {
 						vx.PostEvent(quitErrorf("run script item for %q: %w", sconf.Name, err))
@@ -221,6 +222,9 @@ func main() {
 					if !stayOpen {
 						vx.PostEvent(vaxis.QuitEvent{})
 						return
+					}
+					if isInputTrigger {
+						return // input scripts wait for new input, don't auto-reload
 					}
 					if err := runScript(ctx, vx, spinner, sconf, scriptQuery); err != nil {
 						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
