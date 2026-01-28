@@ -455,7 +455,7 @@ func runScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *s
 		defer spinner.stop()
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, script.Path, args...)
