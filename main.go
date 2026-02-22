@@ -294,7 +294,7 @@ func main() {
 			if _, isInputTrigger := triggersInput[scriptName]; isInputTrigger {
 				continue
 			}
-			if script := scripts[scriptName]; len(script.lines) == 0 {
+			if script := scripts[scriptName]; script.lastLoaded.IsZero() {
 				go func() {
 					if err := runScript(ctx, vx, spinner, script, scriptQuery); err != nil {
 						vx.PostEvent(eventQuitError(err))
