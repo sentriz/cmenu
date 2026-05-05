@@ -55,7 +55,12 @@ func main() {
 	}()
 
 	configDir, _ := os.UserConfigDir()
-	conf, err := parseConfig(filepath.Join(configDir, "cmenu", "config.toml"))
+	confPath := filepath.Join(configDir, "cmenu", "config.toml")
+	if len(os.Args) == 2 {
+		confPath = os.Args[1]
+	}
+
+	conf, err := parseConfig(confPath)
 	if err != nil {
 		quitErr = err
 		return
@@ -73,7 +78,6 @@ func main() {
 		triggersPrefix   = map[ /* prefix */ string] /* script names */ []string{}
 		triggersScript   = map[ /* script name */ string] /* script names */ []string{}
 		triggersInterval = map[ /* script name */ string]time.Duration{}
-		triggersInput    = map[ /* script name */ string]time.Duration{}
 	)
 	for _, sconf := range conf.Scripts {
 		for _, trigger := range sconf.Triggers {
@@ -90,16 +94,6 @@ func main() {
 					quitErr = fmt.Errorf("parse %q: parse duration: %w", sconf.Name, err)
 					return
 				}
-			case "input":
-				var delay = 100 * time.Millisecond
-				if value != "" {
-					delay, err = time.ParseDuration(value)
-					if err != nil {
-						quitErr = fmt.Errorf("parse %q: parse duration: %w", sconf.Name, err)
-						return
-					}
-				}
-				triggersInput[sconf.Name] = delay
 			default:
 				quitErr = fmt.Errorf("parse %q: unknown trigger type %q", sconf.Name, typ)
 				return
@@ -112,7 +106,6 @@ func main() {
 		"prefix", triggersPrefix,
 		"script", triggersScript,
 		"interval", triggersInterval,
-		"input", slices.Collect(maps.Keys(triggersInput)),
 	)
 
 	vx, err := vaxis.New(vaxis.Options{})
@@ -128,11 +121,6 @@ func main() {
 	// elements
 	spinner := newSpinner(vx, 125*time.Millisecond, "▌▀▐▄")
 
-	inp := textinput.
-		New().
-		SetPrompt("> ")
-	inp.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
-
 	for scriptName := range triggersOnStart {
 		sconf := scripts[scriptName]
 
@@ -140,7 +128,7 @@ func main() {
 		go func() {
 			defer spinner.stop()
 
-			if err := runScript(ctx, vx, nil, sconf, ""); err != nil {
+			if err := loadScript(ctx, vx, nil, sconf, ""); err != nil {
 				vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 				return
 			}
@@ -162,19 +150,22 @@ func main() {
 		}
 	}()
 
-	// state
+	input := textinput.
+		New().
+		SetPrompt("> ")
+	input.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
+
+	const scriptQueryDebounce = 150 * time.Millisecond
+	var lastScriptQuery string
+	var scriptQueryChangedAt time.Time
+
+	var index int
+	var selectedScripts []string
+
 	type line struct{ script, text string }
-	var (
-		index              int
-		query              string
-		queryChangedAt     time.Time
-		scriptQuery        string
-		selectedScripts    []string
-		visScripts         []string
-		visLines           []line
-		inputTriggerCtx    context.Context
-		inputTriggerCancel func()
-	)
+
+	var visScripts []string
+	var visLines []line
 
 	active := func() (int, *script, string) {
 		item := visLines[index]
@@ -187,6 +178,9 @@ func main() {
 		win.Clear()
 
 		width, height := win.Size()
+
+		input.Update(ev)
+		scriptQuery, filterQuery := parseInput(input.String())
 
 		switch ev := ev.(type) {
 		case vaxis.Key:
@@ -201,10 +195,11 @@ func main() {
 			case "Home":
 			case "Page_Down":
 			case "Page_Up":
-			case "Right":
+			case "Ctrl+r":
 				_, sconf, _ := active()
+				sq := scriptQuery
 				go func() {
-					if err := runScript(ctx, vx, spinner, sconf, scriptQuery); err != nil {
+					if err := loadScript(ctx, vx, spinner, sconf, sq); err != nil {
 						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 						return
 					}
@@ -213,9 +208,9 @@ func main() {
 				_, sconf, text := active()
 				text, _ = parseLineStyle(text)
 				stayOpen := sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
-				_, isInputTrigger := triggersInput[sconf.Name]
+				sq := scriptQuery
 				go func() {
-					if err := runScript(ctx, vx, spinner, sconf, scriptQuery, text); err != nil {
+					if err := execScript(ctx, spinner, sconf, sq, text); err != nil {
 						vx.PostEvent(quitErrorf("run script item for %q: %w", sconf.Name, err))
 						return
 					}
@@ -223,15 +218,12 @@ func main() {
 						vx.PostEvent(vaxis.QuitEvent{})
 						return
 					}
-					if isInputTrigger {
-						return // input scripts wait for new input, don't auto-reload
-					}
-					if err := runScript(ctx, vx, spinner, sconf, scriptQuery); err != nil {
+					if err := loadScript(ctx, vx, spinner, sconf, sq); err != nil {
 						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 						return
 					}
 					for _, scriptName := range triggersScript[sconf.Name] {
-						if err := runScript(ctx, vx, spinner, scripts[scriptName], scriptQuery); err != nil {
+						if err := loadScript(ctx, vx, spinner, scripts[scriptName], sq); err != nil {
 							vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
 							return
 						}
@@ -247,37 +239,26 @@ func main() {
 			ev()
 		}
 
-		inp.Update(ev)
-		prevQuery := query
-		query = inp.String()
+		if scriptQuery != lastScriptQuery {
+			lastScriptQuery = scriptQuery
+			scriptQueryChangedAt = time.Now()
+		}
+		reloadScripts := !scriptQueryChangedAt.IsZero() && time.Since(scriptQueryChangedAt) >= scriptQueryDebounce
+		if reloadScripts {
+			scriptQueryChangedAt = time.Time{}
+		}
 
 		selectedScripts = selectedScripts[:0]
-		filterQuery := query
-		scriptQuery = query
 
 		// add prefix triggers
-		if left, rest, ok := strings.Cut(filterQuery, " "); ok {
-			if scriptNames := triggersPrefix[left]; len(scriptNames) > 0 {
-				selectedScripts = append(selectedScripts, scriptNames...)
-				filterQuery = rest
-				scriptQuery = rest
-			}
+		left, after, _ := strings.Cut(filterQuery, " ")
+		if scriptNames := triggersPrefix[left]; len(scriptNames) > 0 {
+			selectedScripts = append(selectedScripts, scriptNames...)
+			filterQuery = after
 			// add script triggers
 			for _, scriptName := range selectedScripts {
 				selectedScripts = append(selectedScripts, triggersScript[scriptName]...)
 			}
-		}
-
-		if query != prevQuery {
-			queryChangedAt = time.Now()
-		}
-
-		// cancel any running input scripts and reset debounce
-		if query != prevQuery {
-			if inputTriggerCancel != nil {
-				inputTriggerCancel()
-			}
-			inputTriggerCtx, inputTriggerCancel = context.WithCancel(ctx)
 		}
 
 		// fallback to start scripts
@@ -289,19 +270,19 @@ func main() {
 			}
 		}
 
-		// invoke scripts that haven't been run yet (input scripts wait for debounce)
+		// invoke scripts that haven't been run yet, or reload after script query changes
 		for _, scriptName := range selectedScripts {
-			if _, isInputTrigger := triggersInput[scriptName]; isInputTrigger {
+			script := scripts[scriptName]
+			if !script.lastLoaded.IsZero() && !reloadScripts {
 				continue
 			}
-			if script := scripts[scriptName]; script.lastLoaded.IsZero() {
-				go func() {
-					if err := runScript(ctx, vx, spinner, script, scriptQuery); err != nil {
-						vx.PostEvent(eventQuitError(err))
-						return
-					}
-				}()
-			}
+			sq := scriptQuery
+			go func() {
+				if err := loadScript(ctx, vx, spinner, script, sq); err != nil {
+					vx.PostEvent(eventQuitError(err))
+					return
+				}
+			}()
 		}
 
 		visLines = visLines[:0]
@@ -309,11 +290,10 @@ func main() {
 
 		for _, scriptName := range selectedScripts {
 			script := scripts[scriptName]
-			_, isTriggerInput := triggersInput[scriptName]
 
 			var scriptVisible bool
 			for _, item := range script.lines {
-				if query == "" || isTriggerInput || match(item, filterQuery) {
+				if filterQuery == "" || match(item, filterQuery) {
 					visLines = append(visLines, line{script: scriptName, text: item})
 					scriptVisible = true
 				}
@@ -337,8 +317,9 @@ func main() {
 			script.mu.Unlock()
 
 			if !lastLoaded.IsZero() && time.Since(lastLoaded) >= inter {
+				sq := scriptQuery
 				go func() {
-					if err := runScript(ctx, vx, nil, script, scriptQuery); err != nil {
+					if err := loadScript(ctx, vx, nil, script, sq); err != nil {
 						vx.PostEvent(eventQuitError(err))
 						return
 					}
@@ -346,28 +327,8 @@ func main() {
 			}
 		}
 
-		// run input triggers after debounce
-		for _, scriptName := range selectedScripts {
-			delay, ok := triggersInput[scriptName]
-			if !ok {
-				continue
-			}
-			if queryChangedAt.IsZero() || time.Since(queryChangedAt) < delay {
-				continue
-			}
-			queryChangedAt = time.Time{}
-
-			scriptQuery, inputTriggerCtx := scriptQuery, inputTriggerCtx
-			go func() {
-				if err := runScript(inputTriggerCtx, vx, spinner, scripts[scriptName], scriptQuery); err != nil && inputTriggerCtx.Err() == nil {
-					vx.PostEvent(eventQuitError(err))
-					return
-				}
-			}()
-		}
-
 		inpWin := win.New(0, 0, width, 1)
-		inp.Draw(inpWin)
+		input.Draw(inpWin)
 
 		spinWin := win.New(0, 0, 1, 1)
 		spinner.draw(spinWin)
@@ -448,94 +409,115 @@ func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 type script struct {
 	scriptConf
 	mu         sync.Mutex
-	running    bool
+	load       taskSlot
+	executing  atomic.Bool
 	lastLoaded time.Time
 	lines      []string
 }
 
-func runScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, script *script, query string, args ...string) error {
-	start := time.Now()
-
-	script.mu.Lock()
-	if script.running {
-		script.mu.Unlock()
+func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, query string) error {
+	ctx, gen, ok := sc.load.take(ctx, query)
+	if !ok {
 		return nil
 	}
-	script.running = true
-	script.mu.Unlock()
+	defer sc.load.release(gen)
 
-	defer func() {
-		script.mu.Lock()
-		script.running = false
-		script.mu.Unlock()
-	}()
+	ctx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
 
 	if spinner != nil {
 		spinner.start()
 		defer spinner.stop()
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	start := time.Now()
 
-	cmd := exec.CommandContext(ctx, script.Path, args...)
-	cmd.Env = append(cmd.Environ(),
-		"CMENU_QUERY="+query,
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	}
-	cmd.WaitDelay = 100 * time.Millisecond
-
-	if len(args) > 0 {
-		if err := cmd.Run(); err != nil {
-			return err
-		}
-		return nil
-	}
-
+	cmd := makeCmd(ctx, sc, query)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
 	}
-
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 
 	var lines []string
-
-	sc := bufio.NewScanner(stdout)
-	for sc.Scan() {
-		lines = append(lines, sc.Text())
+	bs := bufio.NewScanner(stdout)
+	for bs.Scan() {
+		lines = append(lines, bs.Text())
 	}
-	if err := sc.Err(); err != nil {
+	if err := bs.Err(); err != nil {
 		return err
 	}
-
 	if err := cmd.Wait(); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 
-	slog.InfoContext(ctx, "loaded script", "script", script.Name, "num_lines", len(lines), "took_ms", time.Since(start).Milliseconds())
+	slog.InfoContext(ctx, "loaded script", "script", sc.Name, "num_lines", len(lines), "took_ms", time.Since(start).Milliseconds())
 
 	vx.SyncFunc(func() {
-		script.mu.Lock()
-		if len(lines) > 0 {
-			script.lines = lines
+		if !sc.load.current(gen) {
+			return
 		}
-		script.lastLoaded = time.Now()
-		script.mu.Unlock()
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		if len(lines) > 0 {
+			sc.lines = lines
+		}
+		sc.lastLoaded = time.Now()
 	})
 
 	return nil
+}
+
+func execScript(parent context.Context, spinner *spinner, sc *script, query, text string) error {
+	if !sc.executing.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer sc.executing.Store(false)
+
+	if spinner != nil {
+		spinner.start()
+		defer spinner.stop()
+	}
+
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	return makeCmd(ctx, sc, query, text).Run()
+}
+
+func makeCmd(ctx context.Context, sc *script, query string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, sc.Path, args...)
+	cmd.Env = append(cmd.Environ(), "CMENU_QUERY="+query)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	cmd.WaitDelay = 100 * time.Millisecond
+	return cmd
 }
 
 func clamp[T cmp.Ordered](v, mn, mx T) T {
 	v = max(v, mn)
 	v = min(v, mx)
 	return v
+}
+
+// parseInput splits input like "cc [1+3] 4" into scriptQuery "1+3" and filterQuery "cc 4"
+func parseInput(s string) (scriptQuery, filterQuery string) {
+	open := strings.Index(s, "[")
+	if open < 0 {
+		return "", s
+	}
+	cl := strings.Index(s[open:], "]")
+	if cl < 0 {
+		return "", s
+	}
+	cl += open
+	scriptQuery = s[open+1 : cl]
+	filterQuery = strings.Join(strings.Fields(s[:open]+" "+s[cl+1:]), " ")
+	return scriptQuery, filterQuery
 }
 
 func match(str, s string) bool {
@@ -632,4 +614,55 @@ func parseConfig(path string) (config, error) {
 	}
 
 	return conf, nil
+}
+
+// taskSlot runs at most one task at a time. take starts a new task: if a task with the
+// same key is already running, it returns ok=false. if a task with a different key is
+// running, that task's context is cancelled
+type taskSlot struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	key    string
+	gen    uint64
+}
+
+func (t *taskSlot) take(ctx context.Context, key string) (context.Context, uint64, bool) {
+	t.mu.Lock()
+	if t.cancel != nil && t.key == key {
+		t.mu.Unlock()
+		return nil, 0, false
+	}
+	prev := t.cancel
+	ctx, cancel := context.WithCancel(ctx)
+	t.cancel = cancel
+	t.gen++
+	gen := t.gen
+	t.key = key
+	t.mu.Unlock()
+
+	if prev != nil {
+		prev()
+	}
+	return ctx, gen, true
+}
+
+func (t *taskSlot) release(gen uint64) {
+	var cancel context.CancelFunc
+	t.mu.Lock()
+	if t.gen == gen {
+		cancel = t.cancel
+		t.cancel = nil
+		t.key = ""
+	}
+	t.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (t *taskSlot) current(gen uint64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.gen == gen
 }
