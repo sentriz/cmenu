@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	git.sr.ht/~rockorager/vaxis v0.15.0
-	github.com/BurntSushi/toml v1.5.0
+	github.com/BurntSushi/toml v1.6.0
 )
 
 require (
