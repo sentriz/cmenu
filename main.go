@@ -135,20 +135,34 @@ func main() {
 		}()
 	}
 
-	// periodic redraws to check intervals
-	go func() {
-		ticker := time.NewTicker(250 * time.Millisecond)
-		defer ticker.Stop()
+	// each interval-triggered script reloads itself on its own ticker, so
+	// the event loop doesn't need to drive periodic reloads
+	for scriptName, inter := range triggersInterval {
+		sc := scripts[scriptName]
+		go func() {
+			ticker := time.NewTicker(inter)
+			defer ticker.Stop()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				vx.PostEvent(vaxis.Redraw{})
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					sc.mu.Lock()
+					loaded := !sc.lastLoaded.IsZero()
+					query := sc.lastQuery
+					sc.mu.Unlock()
+					if !loaded {
+						continue
+					}
+					if err := loadScript(ctx, vx, nil, sc, query); err != nil {
+						vx.PostEvent(eventQuitError(err))
+						return
+					}
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	input := textinput.
 		New().
@@ -303,30 +317,6 @@ func main() {
 			}
 		}
 
-		// run interval triggers
-		for _, scriptName := range visScripts {
-			inter := triggersInterval[scriptName]
-			if inter == 0 {
-				continue
-			}
-
-			script := scripts[scriptName]
-
-			script.mu.Lock()
-			lastLoaded := script.lastLoaded
-			script.mu.Unlock()
-
-			if !lastLoaded.IsZero() && time.Since(lastLoaded) >= inter {
-				sq := scriptQuery
-				go func() {
-					if err := loadScript(ctx, vx, nil, script, sq); err != nil {
-						vx.PostEvent(eventQuitError(err))
-						return
-					}
-				}()
-			}
-		}
-
 		inpWin := win.New(0, 0, width, 1)
 		input.Draw(inpWin)
 
@@ -412,6 +402,7 @@ type script struct {
 	load       taskSlot
 	executing  atomic.Bool
 	lastLoaded time.Time
+	lastQuery  string
 	lines      []string
 }
 
@@ -468,6 +459,7 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *scri
 			sc.lines = lines
 		}
 		sc.lastLoaded = time.Now()
+		sc.lastQuery = query
 	})
 
 	return nil
