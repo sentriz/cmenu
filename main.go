@@ -76,7 +76,7 @@ func main() {
 	var (
 		triggersOnStart  = map[ /* script name */ string]struct{}{}
 		triggersPrefix   = map[ /* prefix */ string] /* script names */ []string{}
-		triggersScript   = map[ /* script name */ string] /* script names */ []string{}
+		triggersScript   = map[ /* script */ string] /* script names */ []string{}
 		triggersInterval = map[ /* script name */ string]time.Duration{}
 	)
 	for _, sconf := range conf.Scripts {
@@ -87,7 +87,7 @@ func main() {
 			case "pre":
 				triggersPrefix[value] = append(triggersPrefix[value], sconf.Name)
 			case "script":
-				triggersScript[sconf.Name] = append(triggersScript[sconf.Name], value)
+				triggersScript[value] = append(triggersScript[value], sconf.Name)
 			case "interval":
 				triggersInterval[sconf.Name], err = time.ParseDuration(value)
 				if err != nil {
