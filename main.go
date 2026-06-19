@@ -29,7 +29,7 @@ import (
 func main() {
 	if len(os.Args) == 2 {
 		switch esc := os.Args[1]; esc {
-		case "highlight", "stay":
+		case "highlight", "stay", "label":
 			fmt.Print(oscPrefix + esc + oscTerm)
 			return
 		}
@@ -185,15 +185,30 @@ func main() {
 	var index int
 	var selectedScripts []string
 
-	type line struct{ script, text string }
+	type line struct {
+		script, text string
+		label        bool
+	}
 
 	var visScripts []string
 	var visLines []line
 
-	active := func() (int, *script, string) {
+	active := func() (*script, string, bool) {
+		if index < 0 || index >= len(visLines) || visLines[index].label {
+			return nil, "", false
+		}
 		item := visLines[index]
-		sconf := scripts[item.script]
-		return index, sconf, item.text
+		return scripts[item.script], item.text, true
+	}
+
+	// step returns the next non-label line from `from` in direction `dir`, or `from` if there is none
+	step := func(lines []line, from, dir int) int {
+		for i := from + dir; i >= 0 && i < len(lines); i += dir {
+			if !lines[i].label {
+				return i
+			}
+		}
+		return from
 	}
 
 	for ev := range vx.Events() {
@@ -211,15 +226,18 @@ func main() {
 			case "Escape", "Ctrl+c":
 				return
 			case "Down":
-				index = clamp(index+1, 0, len(visLines)-1)
+				index = step(visLines, index, +1)
 			case "Up":
-				index = clamp(index-1, 0, len(visLines)-1)
+				index = step(visLines, index, -1)
 			case "End":
 			case "Home":
 			case "Page_Down":
 			case "Page_Up":
 			case "Ctrl+r":
-				_, sconf, _ := active()
+				sconf, _, ok := active()
+				if !ok {
+					break
+				}
 				sq := scriptQuery
 				go func() {
 					if err := loadScript(ctx, vx, spinner, sconf, sq); err != nil {
@@ -228,7 +246,10 @@ func main() {
 					}
 				}()
 			case "Enter", "Shift+Enter":
-				_, sconf, text := active()
+				sconf, text, ok := active()
+				if !ok {
+					break
+				}
 				text, style := parseLineStyle(text)
 				stay := style.stay || sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				sq := scriptQuery
@@ -317,12 +338,23 @@ func main() {
 			var scriptVisible bool
 			for _, item := range script.lines {
 				if filterQuery == "" || match(item, filterQuery) {
-					visLines = append(visLines, line{script: scriptName, text: item})
+					_, style := parseLineStyle(item)
+					visLines = append(visLines, line{script: scriptName, text: item, label: style.label})
 					scriptVisible = true
 				}
 			}
 			if scriptVisible {
 				visScripts = append(visScripts, scriptName)
+			}
+		}
+
+		// keep cursor off labels
+		index = clamp(index, 0, len(visLines)-1)
+		if index >= 0 && visLines[index].label {
+			if n := step(visLines, index, +1); n != index {
+				index = n
+			} else {
+				index = step(visLines, index, -1)
 			}
 		}
 
@@ -334,7 +366,7 @@ func main() {
 
 		listWin := win.New(0, 1, width, height-2)
 		for i, it := range visLines {
-			drawLine(listWin, i, scripts[it.script], it.text, i == index)
+			drawLine(listWin, i, scripts[it.script], it.text, i == index && !it.label)
 		}
 
 		footerWin := win.New(0, height-1, width, 1)
@@ -377,6 +409,9 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	}
 	if lineStyle.highlight {
 		style.Attribute |= vaxis.AttrBold
+	}
+	if lineStyle.label {
+		style.Attribute |= vaxis.AttrDim
 	}
 
 	win.Println(i,
@@ -532,6 +567,7 @@ func match(str, s string) bool {
 type lineStyle struct {
 	highlight bool
 	stay      bool
+	label     bool
 }
 
 // escape code is 6366, or the first 4 numbers of ASCII "cmenu" in hex
@@ -552,6 +588,8 @@ func parseLineStyle(raw string) (text string, style lineStyle) {
 			style.highlight = true
 		case "stay":
 			style.stay = true
+		case "label":
+			style.label = true
 		}
 	}
 	return text, style
