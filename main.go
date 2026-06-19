@@ -27,6 +27,15 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 {
+		switch esc := os.Args[1]; esc {
+		case "highlight", "stay":
+			fmt.Print(oscPrefix + esc + oscTerm)
+			return
+		}
+		os.Exit(1)
+	}
+
 	var slogWriter io.Writer = &bytes.Buffer{}
 	if logPath := os.Getenv("CMENU_LOG_PATH"); logPath != "" {
 		logFile, err := os.Create(logPath)
@@ -220,15 +229,15 @@ func main() {
 				}()
 			case "Enter", "Shift+Enter":
 				_, sconf, text := active()
-				text, _ = parseLineStyle(text)
-				stayOpen := sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
+				text, style := parseLineStyle(text)
+				stay := style.stay || sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				sq := scriptQuery
 				go func() {
 					if err := execScript(ctx, spinner, sconf, sq, text); err != nil {
 						vx.PostEvent(quitErrorf("run script item for %q: %w", sconf.Name, err))
 						return
 					}
-					if !stayOpen {
+					if !stay {
 						vx.PostEvent(vaxis.QuitEvent{})
 						return
 					}
@@ -478,6 +487,7 @@ func execScript(parent context.Context, spinner *spinner, sc *script, query, tex
 
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
+
 	return makeCmd(ctx, sc, query, text).Run()
 }
 
@@ -521,15 +531,17 @@ func match(str, s string) bool {
 
 type lineStyle struct {
 	highlight bool
+	stay      bool
 }
 
 // escape code is 6366, or the first 4 numbers of ASCII "cmenu" in hex
 const oscPrefix = "\x1b]6366;"
+const oscTerm = "\x07"
 
 func parseLineStyle(raw string) (text string, style lineStyle) {
 	text = raw
 	for strings.HasPrefix(text, oscPrefix) {
-		end := strings.Index(text, "\x07")
+		end := strings.Index(text, oscTerm)
 		if end == -1 {
 			break
 		}
@@ -538,6 +550,8 @@ func parseLineStyle(raw string) (text string, style lineStyle) {
 		switch option {
 		case "highlight":
 			style.highlight = true
+		case "stay":
+			style.stay = true
 		}
 	}
 	return text, style
@@ -590,8 +604,8 @@ type scriptConf struct {
 	Name     string   `toml:"name"`
 	Path     string   `toml:"path"`
 	Colour   int      `toml:"colour"`
-	StayOpen bool     `toml:"stay_open"`
 	Columns  []int    `toml:"columns"`
+	StayOpen bool     `toml:"stay_open"`
 }
 
 func parseConfig(path string) (config, error) {
