@@ -371,7 +371,7 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	}
 
 	win.Println(i,
-		vaxis.Segment{Text: padRight(script.Name, " ", 10)},
+		vaxis.Segment{Text: padRight(script.Name, " ", 13)},
 		vaxis.Segment{Text: col, Style: vaxis.Style{Foreground: vaxis.IndexColor(uint8(script.Colour))}},
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
