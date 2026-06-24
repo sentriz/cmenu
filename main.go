@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"image"
 	"io"
 	"log/slog"
 	"maps"
@@ -27,15 +29,6 @@ import (
 )
 
 func main() {
-	if len(os.Args) == 2 {
-		switch esc := os.Args[1]; esc {
-		case "highlight", "stay", "label":
-			fmt.Print(oscPrefix + esc + oscTerm)
-			return
-		}
-		os.Exit(1)
-	}
-
 	var slogWriter io.Writer = &bytes.Buffer{}
 	if logPath := os.Getenv("CMENU_LOG_PATH"); logPath != "" {
 		logFile, err := os.Create(logPath)
@@ -63,11 +56,36 @@ func main() {
 		}
 	}()
 
+	if len(os.Args) > 1 {
+		switch cmd := os.Args[1]; cmd {
+		case markerHighlight, markerStay, markerLabel:
+			fmt.Print(oscPrefix + cmd + oscTerm)
+			return
+		case "image":
+			if len(os.Args) != 3 {
+				quitErr = fmt.Errorf("image needs argument")
+				return
+			}
+			switch file := os.Args[2]; file {
+			case "-":
+				fmt.Print(oscPrefix + markerImageData + ";")
+				enc := base64.NewEncoder(base64.StdEncoding, os.Stdout)
+				io.Copy(enc, os.Stdin)
+				enc.Close()
+				fmt.Print(oscTerm)
+				return
+			default:
+				fmt.Print(oscPrefix + markerImagePath + ";" + file + oscTerm)
+				return
+			}
+		default:
+			quitErr = fmt.Errorf("unknown command %q", cmd)
+			return
+		}
+	}
+
 	configDir, _ := os.UserConfigDir()
 	confPath := filepath.Join(configDir, "cmenu", "config.toml")
-	if len(os.Args) == 2 {
-		confPath = os.Args[1]
-	}
 
 	conf, err := parseConfig(confPath)
 	if err != nil {
@@ -182,29 +200,39 @@ func main() {
 	var lastScriptQuery string
 	var scriptQueryChangedAt time.Time
 
+	const previewDebounce = 150 * time.Millisecond
+	type previewKey struct {
+		sc     *script
+		line   string
+		loaded time.Time
+	}
+	var lastPreviewKey previewKey
+	var previewTimer *time.Timer
+	var imgState imageState
+
 	var index int
 	var selectedScripts []string
 
 	type line struct {
 		script, text string
-		label        bool
+		style        lineStyle
 	}
 
 	var visScripts []string
 	var visLines []line
 
-	active := func() (*script, string, bool) {
-		if index < 0 || index >= len(visLines) || visLines[index].label {
-			return nil, "", false
+	active := func() (*script, line, bool) {
+		if index < 0 || index >= len(visLines) || visLines[index].style.label {
+			return nil, line{}, false
 		}
 		item := visLines[index]
-		return scripts[item.script], item.text, true
+		return scripts[item.script], item, true
 	}
 
 	// step returns the next non-label line from `from` in direction `dir`, or `from` if there is none
 	step := func(lines []line, from, dir int) int {
 		for i := from + dir; i >= 0 && i < len(lines); i += dir {
-			if !lines[i].label {
+			if !lines[i].style.label {
 				return i
 			}
 		}
@@ -246,15 +274,14 @@ func main() {
 					}
 				}()
 			case "Enter", "Shift+Enter":
-				sconf, text, ok := active()
+				sconf, ln, ok := active()
 				if !ok {
 					break
 				}
-				text, style := parseLineStyle(text)
-				stay := style.stay || sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
+				stay := ln.style.stay || sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				sq := scriptQuery
 				go func() {
-					if err := execScript(ctx, spinner, sconf, sq, text); err != nil {
+					if err := execScript(ctx, spinner, sconf, sq, ln.text); err != nil {
 						vx.PostEvent(quitErrorf("run script item for %q: %w", sconf.Name, err))
 						return
 					}
@@ -281,6 +308,8 @@ func main() {
 			return
 		case vaxis.SyncFunc:
 			ev()
+		case vaxis.Redraw:
+			imgState.settle()
 		}
 
 		if scriptQuery != lastScriptQuery {
@@ -337,9 +366,9 @@ func main() {
 
 			var scriptVisible bool
 			for _, item := range script.lines {
-				if filterQuery == "" || match(item, filterQuery) {
-					_, style := parseLineStyle(item)
-					visLines = append(visLines, line{script: scriptName, text: item, label: style.label})
+				text, style := parseLineStyle(item)
+				if filterQuery == "" || match(text, filterQuery) {
+					visLines = append(visLines, line{script: scriptName, text: text, style: style})
 					scriptVisible = true
 				}
 			}
@@ -350,11 +379,45 @@ func main() {
 
 		// keep cursor off labels
 		index = clamp(index, 0, len(visLines)-1)
-		if index >= 0 && visLines[index].label {
+		if index >= 0 && visLines[index].style.label {
 			if n := step(visLines, index, +1); n != index {
 				index = n
 			} else {
 				index = step(visLines, index, -1)
+			}
+		}
+
+		var previewSc *script
+		var previewLine string
+		if sc, ln, ok := active(); ok && sc.Preview {
+			previewSc = sc
+			previewLine = ln.text
+		}
+
+		listW := width
+		var prevWin vaxis.Window
+		if previewSc != nil {
+			listW = width / 2
+			prevWin = win.New(listW+1, 1, width-listW-1, height-2)
+		}
+
+		var key previewKey
+		if previewSc != nil {
+			key = previewKey{previewSc, previewLine, previewSc.lastLoaded}
+		}
+		if key != lastPreviewKey {
+			lastPreviewKey = key
+			if previewTimer != nil {
+				previewTimer.Stop()
+			}
+			if previewSc != nil {
+				sc, line, sq := previewSc, previewLine, scriptQuery
+				cols, rows := prevWin.Size()
+				previewTimer = time.AfterFunc(previewDebounce, func() {
+					if err := previewScript(ctx, vx, sc, sq, line, cols, rows); err != nil {
+						slog.Error("preview script", "script", sc.Name, "error", err.Error())
+					}
+				})
 			}
 		}
 
@@ -364,9 +427,27 @@ func main() {
 		spinWin := win.New(0, 0, 1, 1)
 		spinner.draw(spinWin)
 
-		listWin := win.New(0, 1, width, height-2)
+		listWin := win.New(0, 1, listW, height-2)
 		for i, it := range visLines {
-			drawLine(listWin, i, scripts[it.script], it.text, i == index && !it.label)
+			drawLine(listWin, i, scripts[it.script], it.text, it.style, i == index && !it.style.label)
+		}
+
+		if previewSc != nil {
+			div := win.New(listW, 1, 1, height-2)
+			div.Fill(vaxis.Cell{Character: vaxis.Character{Grapheme: "│", Width: 1}, Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
+
+			previewSc.mu.Lock()
+			pv := previewSc.previewResult
+			ready := previewSc.previewLine == previewLine
+			previewSc.mu.Unlock()
+
+			if pv != nil && ready {
+				imgState.draw(prevWin, vx, pv)
+			} else {
+				imgState.destroy()
+			}
+		} else {
+			imgState.destroy()
 		}
 
 		footerWin := win.New(0, height-1, width, 1)
@@ -382,9 +463,7 @@ func quitErrorf(f string, a ...any) error {
 	return eventQuitError(fmt.Errorf(f, a...))
 }
 
-func drawLine(win vaxis.Window, i int, script *script, text string, selected bool) {
-	text, lineStyle := parseLineStyle(text)
-
+func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected bool) {
 	if len(script.Columns) > 0 {
 		columns := strings.Split(text, "\t")
 		filtered := make([]string, 0, len(columns))
@@ -399,7 +478,7 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	}
 
 	var col string = "▌"
-	if lineStyle.highlight {
+	if ls.highlight {
 		col = "█"
 	}
 
@@ -407,10 +486,10 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 	if selected {
 		style.Attribute |= vaxis.AttrReverse
 	}
-	if lineStyle.highlight {
+	if ls.highlight {
 		style.Attribute |= vaxis.AttrBold
 	}
-	if lineStyle.label {
+	if ls.label {
 		style.Attribute |= vaxis.AttrDim
 	}
 
@@ -420,6 +499,105 @@ func drawLine(win vaxis.Window, i int, script *script, text string, selected boo
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
 	)
+}
+
+type preview struct {
+	text string
+	img  image.Image
+}
+
+func parsePreview(out []byte) *preview {
+	kind, payload, _, ok := cutOSC(string(out))
+	if !ok {
+		return &preview{text: string(out)}
+	}
+
+	var r io.Reader
+	switch kind {
+	case markerImageData:
+		r = base64.NewDecoder(base64.StdEncoding, strings.NewReader(payload))
+	case markerImagePath:
+		f, err := os.Open(payload)
+		if err != nil {
+			return &preview{text: err.Error()}
+		}
+		defer f.Close()
+		r = f
+	default:
+		return &preview{text: string(out)}
+	}
+
+	img, _, err := image.Decode(r)
+	if err != nil {
+		return &preview{text: err.Error()}
+	}
+	return &preview{img: img}
+}
+
+// imageState double-buffers preview images so swaps never blank: the old image
+// stays drawn under the new one until it finishes encoding (a Redraw), see settle.
+type imageState struct {
+	src      *preview
+	cur, old vaxis.Image
+}
+
+func (st *imageState) draw(win vaxis.Window, vx *vaxis.Vaxis, pv *preview) {
+	if pv != nil && pv != st.src {
+		st.src = pv
+		if st.old != nil {
+			st.old.Destroy()
+		}
+		st.old = nil
+		if pv.img != nil {
+			st.old, st.cur = st.cur, nil
+			if img, err := vx.NewImage(pv.img); err == nil {
+				cols, rows := win.Size()
+				img.Resize(cols, rows)
+				st.cur = img
+			}
+		} else if st.cur != nil {
+			st.cur.Destroy()
+			st.cur = nil
+		}
+	}
+
+	if st.cur != nil || st.old != nil {
+		if st.old != nil {
+			st.old.Draw(win)
+		}
+		if st.cur != nil {
+			st.cur.Draw(win)
+		}
+	} else if pv != nil {
+		win.Print(styledSegments(vx, pv.text)...)
+	}
+}
+
+// the new image finished encoding and will place this render, so drop the previous one we were holding underneath it
+func (st *imageState) settle() {
+	if st.old != nil {
+		st.old.Destroy()
+		st.old = nil
+	}
+}
+
+func (st *imageState) destroy() {
+	if st.cur != nil {
+		st.cur.Destroy()
+	}
+	if st.old != nil {
+		st.old.Destroy()
+	}
+	*st = imageState{}
+}
+
+func styledSegments(vx *vaxis.Vaxis, s string) []vaxis.Segment {
+	cells := vx.NewStyledString(s, vaxis.Style{}).Cells
+	segs := make([]vaxis.Segment, len(cells))
+	for i, c := range cells {
+		segs[i] = vaxis.Segment{Text: c.Grapheme, Style: c.Style}
+	}
+	return segs
 }
 
 func drawFooter(win vaxis.Window, conf config, visScripts []string) {
@@ -444,10 +622,14 @@ type script struct {
 	scriptConf
 	mu         sync.Mutex
 	load       taskSlot
+	preview    taskSlot
 	executing  atomic.Bool
 	lastLoaded time.Time
 	lastQuery  string
 	lines      []string
+
+	previewResult *preview
+	previewLine   string
 }
 
 func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, query string) error {
@@ -467,7 +649,7 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *scri
 
 	start := time.Now()
 
-	cmd := makeCmd(ctx, sc, query)
+	cmd := makeCmd(ctx, sc, modeList, query, "")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -523,12 +705,59 @@ func execScript(parent context.Context, spinner *spinner, sc *script, query, tex
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
-	return makeCmd(ctx, sc, query, text).Run()
+	return makeCmd(ctx, sc, modeRun, query, text).Run()
 }
 
-func makeCmd(ctx context.Context, sc *script, query string, args ...string) *exec.Cmd {
+func previewScript(ctx context.Context, vx *vaxis.Vaxis, sc *script, query, line string, cols, rows int) error {
+	ctx, gen, ok := sc.preview.take(ctx, line)
+	if !ok {
+		return nil
+	}
+	defer sc.preview.release(gen)
+
+	ctx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelTimeout()
+
+	out, err := makeCmd(ctx, sc, modePreview, query, line,
+		fmt.Sprintf("CMENU_PREVIEW_COLS=%d", cols),
+		fmt.Sprintf("CMENU_PREVIEW_LINES=%d", rows),
+	).Output()
+	if err != nil && ctx.Err() != nil {
+		return nil
+	}
+
+	pv := parsePreview(out)
+	if err != nil {
+		pv = &preview{text: err.Error()}
+	}
+
+	vx.SyncFunc(func() {
+		if !sc.preview.current(gen) {
+			return
+		}
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		sc.previewResult = pv
+		sc.previewLine = line
+	})
+
+	return nil
+}
+
+const (
+	modeList    = "list"
+	modeRun     = "run"
+	modePreview = "preview"
+)
+
+func makeCmd(ctx context.Context, sc *script, mode, query, line string, extraEnv ...string) *exec.Cmd {
+	var args []string
+	if line != "" {
+		args = append(args, line)
+	}
 	cmd := exec.CommandContext(ctx, sc.Path, args...)
-	cmd.Env = append(cmd.Environ(), "CMENU_QUERY="+query)
+	cmd.Env = append(cmd.Environ(), "CMENU_MODE="+mode, "CMENU_INPUT="+query)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = 100 * time.Millisecond
@@ -557,11 +786,8 @@ func parseInput(s string) (scriptQuery, filterQuery string) {
 	return scriptQuery, filterQuery
 }
 
-func match(str, s string) bool {
-	str, _ = parseLineStyle(str)
-	str = strings.ToLower(str)
-	s = strings.ToLower(s)
-	return strings.Contains(str, s)
+func match(text, s string) bool {
+	return strings.Contains(strings.ToLower(text), strings.ToLower(s))
 }
 
 type lineStyle struct {
@@ -574,21 +800,42 @@ type lineStyle struct {
 const oscPrefix = "\x1b]6366;"
 const oscTerm = "\x07"
 
+// marker kinds shared between the emit subcommands in main and the parsers
+const (
+	markerHighlight = "highlight"
+	markerStay      = "stay"
+	markerLabel     = "label"
+	markerImageData = "image-data"
+	markerImagePath = "image-path"
+)
+
+func cutOSC(s string) (kind, payload, rest string, ok bool) {
+	after, ok := strings.CutPrefix(s, oscPrefix)
+	if !ok {
+		return "", "", s, false
+	}
+	body, rest, ok := strings.Cut(after, oscTerm)
+	if !ok {
+		return "", "", s, false
+	}
+	kind, payload, _ = strings.Cut(body, ";")
+	return kind, payload, rest, true
+}
+
 func parseLineStyle(raw string) (text string, style lineStyle) {
 	text = raw
-	for strings.HasPrefix(text, oscPrefix) {
-		end := strings.Index(text, oscTerm)
-		if end == -1 {
+	for {
+		kind, _, rest, ok := cutOSC(text)
+		if !ok {
 			break
 		}
-		option := text[len(oscPrefix):end]
-		text = text[end+1:]
-		switch option {
-		case "highlight":
+		text = rest
+		switch kind {
+		case markerHighlight:
 			style.highlight = true
-		case "stay":
+		case markerStay:
 			style.stay = true
-		case "label":
+		case markerLabel:
 			style.label = true
 		}
 	}
@@ -644,6 +891,7 @@ type scriptConf struct {
 	Colour   int      `toml:"colour"`
 	Columns  []int    `toml:"columns"`
 	StayOpen bool     `toml:"stay_open"`
+	Preview  bool     `toml:"preview"`
 }
 
 func parseConfig(path string) (config, error) {
