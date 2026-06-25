@@ -147,6 +147,7 @@ func main() {
 
 	// elements
 	spinner := newSpinner(vx, 125*time.Millisecond, "▌▀▐▄")
+	previewSpinner := newSpinner(vx, 125*time.Millisecond, "▌▀▐▄")
 
 	for scriptName := range triggersOnStart {
 		sconf := scripts[scriptName]
@@ -414,7 +415,7 @@ func main() {
 				sc, line, sq := previewSc, previewLine, scriptQuery
 				cols, rows := prevWin.Size()
 				previewTimer = time.AfterFunc(previewDebounce, func() {
-					if err := previewScript(ctx, vx, sc, sq, line, cols, rows); err != nil {
+					if err := previewScript(ctx, vx, previewSpinner, sc, sq, line, cols, rows); err != nil {
 						slog.Error("preview script", "script", sc.Name, "error", err.Error())
 					}
 				})
@@ -445,6 +446,7 @@ func main() {
 				imgState.draw(prevWin, vx, pv)
 			} else {
 				imgState.destroy()
+				previewSpinner.draw(prevWin.New(0, 0, 1, 1))
 			}
 		} else {
 			imgState.destroy()
@@ -708,7 +710,7 @@ func execScript(parent context.Context, spinner *spinner, sc *script, query, tex
 	return makeCmd(ctx, sc, modeRun, query, text).Run()
 }
 
-func previewScript(ctx context.Context, vx *vaxis.Vaxis, sc *script, query, line string, cols, rows int) error {
+func previewScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, query, line string, cols, rows int) error {
 	ctx, gen, ok := sc.preview.take(ctx, line)
 	if !ok {
 		return nil
@@ -717,6 +719,11 @@ func previewScript(ctx context.Context, vx *vaxis.Vaxis, sc *script, query, line
 
 	ctx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelTimeout()
+
+	if spinner != nil {
+		spinner.start()
+		defer spinner.stop()
+	}
 
 	out, err := makeCmd(ctx, sc, modePreview, query, line,
 		fmt.Sprintf("CMENU_PREVIEW_COLS=%d", cols),
