@@ -416,7 +416,7 @@ func main() {
 				cols, rows := prevWin.Size()
 				previewTimer = time.AfterFunc(previewDebounce, func() {
 					if err := previewScript(ctx, vx, previewSpinner, sc, sq, line, cols, rows); err != nil {
-						slog.Error("preview script", "script", sc.Name, "error", err.Error())
+						vx.PostEvent(quitErrorf("preview script %q: %w", sc.Name, err))
 					}
 				})
 			}
@@ -508,10 +508,10 @@ type preview struct {
 	img  image.Image
 }
 
-func parsePreview(out []byte) *preview {
+func parsePreview(out []byte) (*preview, error) {
 	kind, payload, _, ok := cutOSC(string(out))
 	if !ok {
-		return &preview{text: string(out)}
+		return &preview{text: string(out)}, nil
 	}
 
 	var r io.Reader
@@ -521,19 +521,19 @@ func parsePreview(out []byte) *preview {
 	case markerImagePath:
 		f, err := os.Open(payload)
 		if err != nil {
-			return &preview{text: err.Error()}
+			return nil, err
 		}
 		defer f.Close()
 		r = f
 	default:
-		return &preview{text: string(out)}
+		return &preview{text: string(out)}, nil
 	}
 
 	img, _, err := image.Decode(r)
 	if err != nil {
-		return &preview{text: err.Error()}
+		return nil, err
 	}
-	return &preview{img: img}
+	return &preview{img: img}, nil
 }
 
 // imageState double-buffers preview images so swaps never blank: the old image
@@ -729,13 +729,16 @@ func previewScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *s
 		fmt.Sprintf("CMENU_PREVIEW_COLS=%d", cols),
 		fmt.Sprintf("CMENU_PREVIEW_LINES=%d", rows),
 	).Output()
-	if err != nil && ctx.Err() != nil {
-		return nil
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
 	}
 
-	pv := parsePreview(out)
+	pv, err := parsePreview(out)
 	if err != nil {
-		pv = &preview{text: err.Error()}
+		return err
 	}
 
 	vx.SyncFunc(func() {
