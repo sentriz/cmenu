@@ -240,6 +240,20 @@ func main() {
 		return from
 	}
 
+	stepGroup := func(lines []line, from, dir int) int {
+		cur := from
+		for cur >= 0 && cur < len(lines) && lines[cur].script == lines[from].script {
+			cur += dir
+		}
+		if cur < 0 || cur >= len(lines) {
+			return from
+		}
+		for cur > 0 && lines[cur-1].script == lines[cur].script {
+			cur--
+		}
+		return cur
+	}
+
 	for ev := range vx.Events() {
 		win := vx.Window()
 		win.Clear()
@@ -258,6 +272,10 @@ func main() {
 				index = step(visLines, index, +1)
 			case "Up":
 				index = step(visLines, index, -1)
+			case "Shift+Down":
+				index = stepGroup(visLines, index, +1)
+			case "Shift+Up":
+				index = stepGroup(visLines, index, -1)
 			case "End":
 			case "Home":
 			case "Page_Down":
