@@ -334,6 +334,9 @@ func main() {
 		if scriptQuery != lastScriptQuery {
 			lastScriptQuery = scriptQuery
 			scriptQueryChangedAt = time.Now()
+			for _, scriptName := range selectedScripts {
+				scripts[scriptName].load.abort(scriptQuery)
+			}
 		}
 		reloadScripts := !scriptQueryChangedAt.IsZero() && time.Since(scriptQueryChangedAt) >= scriptQueryDebounce
 		if reloadScripts {
@@ -425,6 +428,9 @@ func main() {
 			key = previewKey{previewSc, previewLine, previewSc.lastLoaded}
 		}
 		if key != lastPreviewKey {
+			if lastPreviewKey.sc != nil {
+				lastPreviewKey.sc.preview.abort(key.line)
+			}
 			lastPreviewKey = key
 			if previewTimer != nil {
 				previewTimer.Stop()
@@ -964,6 +970,19 @@ func (t *taskSlot) take(ctx context.Context, key string) (context.Context, uint6
 		prev()
 	}
 	return ctx, gen, true
+}
+
+func (t *taskSlot) abort(key string) {
+	t.mu.Lock()
+	var cancel context.CancelFunc
+	if t.cancel != nil && t.key != key {
+		cancel = t.cancel
+	}
+	t.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (t *taskSlot) release(gen uint64) {
