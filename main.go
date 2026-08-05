@@ -389,7 +389,7 @@ func main() {
 			var scriptVisible bool
 			for _, item := range script.lines {
 				text, style := parseLineStyle(item)
-				if filterQuery == "" || match(text, filterQuery) {
+				if filterQuery == "" || match(displayText(script, text), filterQuery) {
 					visLines = append(visLines, line{script: scriptName, text: text, style: style})
 					scriptVisible = true
 				}
@@ -489,19 +489,22 @@ func quitErrorf(f string, a ...any) error {
 	return eventQuitError(fmt.Errorf(f, a...))
 }
 
-func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected bool) {
-	if len(script.Columns) > 0 {
-		columns := strings.Split(text, "\t")
-		filtered := make([]string, 0, len(columns))
-		for _, c := range script.Columns { // 1 indexed display columns
-			if i := c - 1; i <= len(columns)-1 {
-				filtered = append(filtered, columns[i])
-			}
-		}
-		text = strings.Join(filtered, " ")
-	} else {
-		text = strings.ReplaceAll(text, "\t", " ")
+func displayText(script *script, text string) string {
+	if len(script.Columns) == 0 {
+		return strings.ReplaceAll(text, "\t", " ")
 	}
+	columns := strings.Split(text, "\t")
+	filtered := make([]string, 0, len(columns))
+	for _, c := range script.Columns { // 1 indexed display columns
+		if i := c - 1; i <= len(columns)-1 {
+			filtered = append(filtered, columns[i])
+		}
+	}
+	return strings.Join(filtered, " ")
+}
+
+func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected bool) {
+	text = displayText(script, text)
 
 	var col string = "▌"
 	if ls.highlight {
