@@ -200,6 +200,7 @@ func main() {
 	const scriptQueryDebounce = 150 * time.Millisecond
 	var lastScriptQuery string
 	var scriptQueryChangedAt time.Time
+	var scriptQueryTimer *time.Timer
 
 	const previewDebounce = 150 * time.Millisecond
 	type previewKey struct {
@@ -340,6 +341,12 @@ func main() {
 		if scriptQuery != lastScriptQuery {
 			lastScriptQuery = scriptQuery
 			scriptQueryChangedAt = time.Now()
+			if scriptQueryTimer != nil {
+				scriptQueryTimer.Stop()
+			}
+			scriptQueryTimer = time.AfterFunc(scriptQueryDebounce, func() {
+				vx.PostEvent(vaxis.SyncFunc(func() {}))
+			})
 			for _, scriptName := range selectedScripts {
 				scripts[scriptName].load.abort(scriptQuery)
 			}
