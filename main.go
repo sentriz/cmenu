@@ -212,6 +212,7 @@ func main() {
 	var imgState imageState
 
 	var index int
+	var scroll int
 	var selectedScripts []string
 
 	type line struct {
@@ -259,6 +260,7 @@ func main() {
 		win.Clear()
 
 		width, height := win.Size()
+		rows := height - 2
 
 		input.Update(ev)
 		scriptQuery, filterQuery := parseInput(input.String())
@@ -277,9 +279,13 @@ func main() {
 			case "Shift+Up":
 				index = stepGroup(visLines, index, -1)
 			case "End":
+				index = len(visLines) - 1
 			case "Home":
+				index = 0
 			case "Page_Down":
+				index = min(index+rows-1, len(visLines)-1)
 			case "Page_Up":
+				index = max(index-rows+1, 0)
 			case "Ctrl+r":
 				sconf, _, ok := active()
 				if !ok {
@@ -409,6 +415,9 @@ func main() {
 			}
 		}
 
+		scroll = clamp(scroll, index-rows+1, index)
+		scroll = clamp(scroll, 0, max(0, len(visLines)-rows))
+
 		var previewSc *script
 		var previewLine string
 		if sc, ln, ok := active(); ok && sc.Preview {
@@ -452,9 +461,10 @@ func main() {
 		spinWin := win.New(0, 0, 1, 1)
 		spinner.draw(spinWin)
 
-		listWin := win.New(0, 1, listW, height-2)
-		for i, it := range visLines {
-			drawLine(listWin, i, scripts[it.script], it.text, it.style, i == index && !it.style.label)
+		listWin := win.New(0, 1, listW, rows)
+		for i := scroll; i < len(visLines) && i-scroll < rows; i++ {
+			it := visLines[i]
+			drawLine(listWin, i-scroll, scripts[it.script], it.text, it.style, i == index && !it.style.label)
 		}
 
 		if previewSc != nil {
