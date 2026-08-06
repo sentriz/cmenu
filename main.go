@@ -29,19 +29,8 @@ import (
 )
 
 func main() {
+	// may be overwritten later by log file
 	var slogWriter io.Writer = &bytes.Buffer{}
-	if logPath := os.Getenv("CMENU_LOG_PATH"); logPath != "" {
-		logFile, err := os.Create(logPath)
-		if err != nil {
-			panic(err)
-		}
-		slogWriter = logFile
-	}
-	{
-		slogHandler := slog.NewJSONHandler(slogWriter, nil)
-		slogLogger := slog.New(slogHandler)
-		slog.SetDefault(slogLogger)
-	}
 
 	var quitErr error
 	defer func() {
@@ -82,6 +71,20 @@ func main() {
 			quitErr = fmt.Errorf("unknown command %q", cmd)
 			return
 		}
+	}
+
+	if logPath := os.Getenv("CMENU_LOG_PATH"); logPath != "" {
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			quitErr = err
+			return
+		}
+		slogWriter = logFile
+	}
+	{
+		slogHandler := slog.NewJSONHandler(slogWriter, nil)
+		slogLogger := slog.New(slogHandler)
+		slog.SetDefault(slogLogger)
 	}
 
 	configDir, _ := os.UserConfigDir()
@@ -402,7 +405,7 @@ func main() {
 			var scriptVisible bool
 			for _, item := range script.lines {
 				text, style := parseLineStyle(item)
-				if filterQuery == "" || match(displayText(script, text), filterQuery) {
+				if filterQuery == "" || contains(displayText(script, text), filterQuery) {
 					visLines = append(visLines, line{script: scriptName, text: text, style: style})
 					scriptVisible = true
 				}
@@ -840,7 +843,7 @@ func parseInput(s string) (scriptQuery, filterQuery string) {
 	return scriptQuery, filterQuery
 }
 
-func match(text, s string) bool {
+func contains(text, s string) bool {
 	return strings.Contains(strings.ToLower(text), strings.ToLower(s))
 }
 
