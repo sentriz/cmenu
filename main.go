@@ -96,10 +96,20 @@ func main() {
 		return
 	}
 
+	const defaultDebounce = 150 * time.Millisecond
+
 	var scripts = map[string]*script{}
 	var scriptOrder = make([]string, 0, len(conf.Scripts))
 	for _, sconf := range conf.Scripts {
-		scripts[sconf.Name] = &script{scriptConf: sconf}
+		sc := &script{scriptConf: sconf, debounce: defaultDebounce}
+		if sconf.Debounce != "" {
+			sc.debounce, err = time.ParseDuration(sconf.Debounce)
+			if err != nil {
+				quitErr = fmt.Errorf("parse %q: parse debounce: %w", sconf.Name, err)
+				return
+			}
+		}
+		scripts[sconf.Name] = sc
 		scriptOrder = append(scriptOrder, sconf.Name)
 	}
 
@@ -200,10 +210,8 @@ func main() {
 		SetPrompt("> ")
 	input.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
 
-	const scriptQueryDebounce = 150 * time.Millisecond
 	var lastScriptQuery string
 	var scriptQueryChangedAt time.Time
-	var scriptQueryTimer *time.Timer
 
 	const previewDebounce = 150 * time.Millisecond
 	type previewKey struct {
@@ -344,19 +352,14 @@ func main() {
 		if scriptQuery != lastScriptQuery {
 			lastScriptQuery = scriptQuery
 			scriptQueryChangedAt = time.Now()
-			if scriptQueryTimer != nil {
-				scriptQueryTimer.Stop()
-			}
-			scriptQueryTimer = time.AfterFunc(scriptQueryDebounce, func() {
-				vx.PostEvent(vaxis.SyncFunc(func() {}))
-			})
 			for _, scriptName := range selectedScripts {
-				scripts[scriptName].load.abort(scriptQuery)
+				script := scripts[scriptName]
+				script.load.abort(scriptQuery)
+				// wake the loop when this script's debounce is up, a late wake is harmless
+				time.AfterFunc(script.debounce, func() {
+					vx.PostEvent(vaxis.SyncFunc(func() {}))
+				})
 			}
-		}
-		reloadScripts := !scriptQueryChangedAt.IsZero() && time.Since(scriptQueryChangedAt) >= scriptQueryDebounce
-		if reloadScripts {
-			scriptQueryChangedAt = time.Time{}
 		}
 
 		selectedScripts = selectedScripts[:0]
@@ -381,10 +384,13 @@ func main() {
 			}
 		}
 
-		// invoke scripts that haven't been run yet, or reload after script query changes
+		// invoke scripts that haven't been run yet, or reload once the script query settles for their debounce
 		for _, scriptName := range selectedScripts {
 			script := scripts[scriptName]
-			if !script.lastLoaded.IsZero() && !reloadScripts {
+			if time.Since(scriptQueryChangedAt) < script.debounce {
+				continue
+			}
+			if !script.lastLoaded.IsZero() && script.lastQuery == scriptQuery {
 				continue
 			}
 			sq := scriptQuery
@@ -675,6 +681,7 @@ func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 
 type script struct {
 	scriptConf
+	debounce   time.Duration
 	mu         sync.Mutex
 	load       taskSlot
 	preview    taskSlot
@@ -692,7 +699,15 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *scri
 	if !ok {
 		return nil
 	}
-	defer sc.load.release(gen)
+
+	// hold the slot until the result is published, else the event loop sees a script
+	// with no result and no load in flight, and starts a duplicate
+	var releaseLater bool
+	defer func() {
+		if !releaseLater {
+			sc.load.release(gen)
+		}
+	}()
 
 	ctx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelTimeout()
@@ -730,7 +745,9 @@ func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *scri
 
 	slog.InfoContext(ctx, "loaded script", "script", sc.Name, "num_lines", len(lines), "took_ms", time.Since(start).Milliseconds())
 
+	releaseLater = true
 	vx.SyncFunc(func() {
+		defer sc.load.release(gen)
 		if !sc.load.current(gen) {
 			return
 		}
@@ -996,6 +1013,7 @@ type scriptConf struct {
 	Name     string   `toml:"name"`
 	Path     string   `toml:"path"`
 	Colour   int      `toml:"colour"`
+	Debounce string   `toml:"debounce"`
 	Columns  []int    `toml:"columns"`
 	StayOpen bool     `toml:"stay_open"`
 	Preview  bool     `toml:"preview"`
