@@ -396,22 +396,28 @@ func main() {
 			}()
 		}
 
-		visLines = visLines[:0]
-		visScripts = visScripts[:0]
+		for fuzz := range 3 {
+			visLines = visLines[:0]
+			visScripts = visScripts[:0]
 
-		for _, scriptName := range selectedScripts {
-			script := scripts[scriptName]
+			for _, scriptName := range selectedScripts {
+				script := scripts[scriptName]
 
-			var scriptVisible bool
-			for _, item := range script.lines {
-				text, style := parseLineStyle(item)
-				if filterQuery == "" || contains(displayText(script, text), filterQuery) {
-					visLines = append(visLines, line{script: scriptName, text: text, style: style})
-					scriptVisible = true
+				var scriptVisible bool
+				for _, item := range script.lines {
+					text, style := parseLineStyle(item)
+					if filterQuery == "" || matches(displayText(script, text), filterQuery, fuzz) {
+						visLines = append(visLines, line{script: scriptName, text: text, style: style})
+						scriptVisible = true
+					}
+				}
+				if scriptVisible {
+					visScripts = append(visScripts, scriptName)
 				}
 			}
-			if scriptVisible {
-				visScripts = append(visScripts, scriptName)
+
+			if len(visLines) > 0 {
+				break
 			}
 		}
 
@@ -843,8 +849,52 @@ func parseInput(s string) (scriptQuery, filterQuery string) {
 	return scriptQuery, filterQuery
 }
 
-func contains(text, s string) bool {
-	return strings.Contains(strings.ToLower(text), strings.ToLower(s))
+// matches reports whether every query token appears in text, with increasing tolerance per fuzz level:
+// 0 plain substring, 1 windowed subsequence, 2 subsequence with one rune of 4+ rune tokens dropped
+func matches(text, query string, fuzz int) bool {
+	text = strings.ToLower(text)
+	query = strings.ToLower(query)
+
+	for tok := range strings.FieldsSeq(query) {
+		if !matchToken(text, tok, fuzz) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchToken(text, tok string, fuzz int) bool {
+	if fuzz == 0 {
+		return strings.Contains(text, tok)
+	}
+	line, runes := []rune(text), []rune(tok)
+	if subsequence(line, runes) {
+		return true
+	}
+	if fuzz > 1 && len(runes) >= 4 {
+		for i := range runes {
+			if subsequence(line, slices.Concat(runes[:i], runes[i+1:])) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// subsequence reports whether tok appears in order in line within a window of 2x the token length
+func subsequence(line, tok []rune) bool {
+	for start := range line {
+		i := 0
+		for j := start; j < len(line) && j < start+2*len(tok) && i < len(tok); j++ {
+			if line[j] == tok[i] {
+				i++
+			}
+		}
+		if i == len(tok) {
+			return true
+		}
+	}
+	return false
 }
 
 type lineStyle struct {
