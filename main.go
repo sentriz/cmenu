@@ -275,17 +275,29 @@ func main() {
 		rows := height - 2
 
 		input.Update(ev)
-		scriptQuery, filterQuery := parseInput(input.String())
+		selectName, selected, scriptQuery, filterQuery := parseInput(input.String())
 
 		switch ev := ev.(type) {
 		case vaxis.Key:
 			switch ev.String() {
-			case "Escape", "Ctrl+c":
+			case "Escape", "Ctrl+c", "Ctrl+d":
 				return
 			case "Down":
 				index = step(visLines, index, +1)
 			case "Up":
 				index = step(visLines, index, -1)
+			case "Shift+Right", "Shift+Left":
+				dir := 1
+				if ev.String() == "Shift+Left" {
+					dir = -1
+				}
+				cur := selectName
+				if left, _, _ := strings.Cut(filterQuery, " "); len(triggersPrefix[left]) > 0 {
+					cur = triggersPrefix[left][0]
+				}
+				input.SetContent(selectPrefix + cycleScript(scriptOrder, cur, dir) + " ")
+				selectName, selected, scriptQuery, filterQuery = parseInput(input.String())
+				index, scroll = 0, 0
 			case "Shift+Down":
 				index = stepGroup(visLines, index, +1)
 			case "Shift+Up":
@@ -364,19 +376,24 @@ func main() {
 
 		selectedScripts = selectedScripts[:0]
 
-		// add prefix triggers
-		left, after, _ := strings.Cut(filterQuery, " ")
-		if scriptNames := triggersPrefix[left]; len(scriptNames) > 0 {
+		// selectScripts adds scripts plus everything they trigger
+		selectScripts := func(scriptNames ...string) {
 			selectedScripts = append(selectedScripts, scriptNames...)
-			filterQuery = after
-			// add script triggers
-			for _, scriptName := range selectedScripts {
+			for _, scriptName := range scriptNames {
 				selectedScripts = append(selectedScripts, triggersScript[scriptName]...)
 			}
 		}
 
-		// fallback to start scripts
-		if len(selectedScripts) == 0 {
+		left, after, _ := strings.Cut(filterQuery, " ")
+		switch scriptNames := triggersPrefix[left]; {
+		case selected:
+			if scripts[selectName] != nil {
+				selectScripts(selectName)
+			}
+		case len(scriptNames) > 0:
+			filterQuery = after
+			selectScripts(scriptNames...)
+		default:
 			for _, scriptName := range scriptOrder {
 				if _, ok := triggersOnStart[scriptName]; ok {
 					selectedScripts = append(selectedScripts, scriptName)
@@ -519,6 +536,19 @@ type eventQuitError error
 
 func quitErrorf(f string, a ...any) error {
 	return eventQuitError(fmt.Errorf(f, a...))
+}
+
+const selectPrefix = "#"
+
+func cycleScript(order []string, cur string, dir int) string {
+	if len(order) == 0 {
+		return cur
+	}
+	i := slices.Index(order, cur)
+	if i < 0 && dir < 0 {
+		i = 0
+	}
+	return order[(i+dir+len(order))%len(order)]
 }
 
 func displayText(script *script, text string) string {
@@ -850,20 +880,26 @@ func clamp[T cmp.Ordered](v, mn, mx T) T {
 	return v
 }
 
-// parseInput splits input like "cc [1+3] 4" into scriptQuery "1+3" and filterQuery "cc 4"
-func parseInput(s string) (scriptQuery, filterQuery string) {
+// parseInput splits input like "#calc cc [1+3] 4" into the selected script name "calc",
+// scriptQuery "1+3" and filterQuery "cc 4". a leading selectPrefix always selects by name,
+// so "#" alone selects nothing rather than falling back to the on-start scripts
+func parseInput(s string) (selectName string, selected bool, scriptQuery, filterQuery string) {
+	if rest, ok := strings.CutPrefix(s, selectPrefix); ok {
+		selected = true
+		selectName, s, _ = strings.Cut(rest, " ")
+	}
 	open := strings.Index(s, "[")
 	if open < 0 {
-		return "", s
+		return selectName, selected, "", s
 	}
 	cl := strings.Index(s[open:], "]")
 	if cl < 0 {
-		return "", s
+		return selectName, selected, "", s
 	}
 	cl += open
 	scriptQuery = s[open+1 : cl]
 	filterQuery = strings.Join(strings.Fields(s[:open]+" "+s[cl+1:]), " ")
-	return scriptQuery, filterQuery
+	return selectName, selected, scriptQuery, filterQuery
 }
 
 // matches reports whether every query token appears in text, with increasing tolerance per fuzz level:

@@ -8,7 +8,7 @@ I had a bunch of dmenu scripts with a keybinding for each one, and I could never
 
 - A menu is just an executable script which prints lines.
 - cmenu runs the scripts, they don't run cmenu.
-- One keybinding for all of them - scripts are picked by prefix, `b` for bluetooth, or `on-start` for none at all.
+- One keybinding for all of them - scripts are picked by prefix, `b` for bluetooth, or `on-start` for none at all. Or by name with `#<name>`, or by cycling with <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd>.
 - Several scripts can be shown at once, in one list, each with its own colour.
 - Because cmenu runs them, scripts can be re-run - on an interval, after a selection, or with <kbd>Ctrl+r</kbd>. One script can even trigger another.
 - Optional preview pane, filled by the same script - called again with the selected line, printing text or an image.
@@ -101,14 +101,15 @@ Config lives in `$XDG_CONFIG_HOME/cmenu/config.toml`, and is a list of scripts.
 
 #### Keys
 
-| Key                                         | Description                 |
-| ------------------------------------------- | --------------------------- |
-| <kbd>Enter</kbd>                            | Run the selected line       |
-| <kbd>Shift+Enter</kbd>                      | Run it, but keep cmenu open |
-| <kbd>Ctrl+r</kbd>                           | Reload the selected script  |
-| <kbd>Up</kbd> / <kbd>Down</kbd>             | Move                        |
-| <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd> | Jump between scripts        |
-| <kbd>Escape</kbd> / <kbd>Ctrl+c</kbd>       | Quit                        |
+| Key                                                       | Description                 |
+| --------------------------------------------------------- | --------------------------- |
+| <kbd>Enter</kbd>                                          | Run the selected line       |
+| <kbd>Shift+Enter</kbd>                                    | Run it, but keep cmenu open |
+| <kbd>Ctrl+r</kbd>                                         | Reload the selected script  |
+| <kbd>Up</kbd> / <kbd>Down</kbd>                           | Move                        |
+| <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd>               | Jump between scripts        |
+| <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd>            | Cycle which script is shown |
+| <kbd>Escape</kbd> / <kbd>Ctrl+c</kbd> / <kbd>Ctrl+d</kbd> | Quit                        |
 
 ---
 
@@ -143,6 +144,15 @@ But some scripts can't print anything until you've told them what you want - a c
 - `m [deepchord] album` - `m` picks the subsonic menu, which searches the server for `deepchord`, and `album` filters those results down to the album lines.
 
 Text outside the brackets filters the lines cmenu already has. Text inside them runs the script again, so give bracket scripts a `debounce` to keep that off every keystroke.
+
+#### Picking a script by name
+
+A script doesn't need a prefix. If the input starts with `#`, the next word is a script `name`, and only that script is shown:
+
+- `#bluetooth` - show the bluetooth script, whatever its triggers are.
+- `#radio jazz` - show the radio script, filtered by `jazz`.
+
+<kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> cycle through every script in config order, rewriting the input as `#<name>`, so the footer is walkable without remembering any prefix.
 
 #### Markers
 
