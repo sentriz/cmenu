@@ -29,9 +29,9 @@ import (
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
 
-	"git.sr.ht/~rockorager/vaxis"
-	vxspinner "git.sr.ht/~rockorager/vaxis/widgets/spinner"
-	"git.sr.ht/~rockorager/vaxis/widgets/textinput"
+	"go.rockorager.dev/vaxis"
+	vxspinner "go.rockorager.dev/vaxis/widgets/spinner"
+	"go.rockorager.dev/vaxis/widgets/textinput"
 	"github.com/BurntSushi/toml"
 )
 
@@ -275,6 +275,10 @@ func main() {
 	}
 
 	for ev := range vx.Events() {
+		if rs, ok := ev.(vaxis.Resize); ok {
+			vx.Resize(rs)
+		}
+
 		win := vx.Window()
 		win.Clear()
 
@@ -286,6 +290,9 @@ func main() {
 
 		switch ev := ev.(type) {
 		case vaxis.Key:
+			if ev.EventType == vaxis.EventRelease {
+				break
+			}
 			switch ev.String() {
 			case "Escape", "Ctrl+c", "Ctrl+d":
 				return
