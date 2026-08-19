@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	git.sr.ht/~rockorager/vaxis v0.15.0
 	github.com/BurntSushi/toml v1.5.0
+	golang.org/x/image v0.45.0
 )
 
 require (
@@ -14,6 +15,5 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/soniakeys/quant v1.0.0 // indirect
 	golang.org/x/exp v0.0.0-20250911091902-df9299821621 // indirect
-	golang.org/x/image v0.31.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 )

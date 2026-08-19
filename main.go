@@ -8,6 +8,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"maps"
@@ -21,6 +24,10 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
+	_ "golang.org/x/image/webp"
 
 	"git.sr.ht/~rockorager/vaxis"
 	vxspinner "git.sr.ht/~rockorager/vaxis/widgets/spinner"
