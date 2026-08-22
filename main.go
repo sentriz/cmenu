@@ -215,7 +215,7 @@ func main() {
 	input := textinput.
 		New().
 		SetPrompt("> ")
-	input.Prompt = vaxis.Style{Foreground: vaxis.ColorBlack}
+	input.Prompt = vaxis.Style{Attribute: vaxis.AttrDim}
 
 	var lastScriptQuery string
 	var scriptQueryChangedAt time.Time
@@ -522,7 +522,7 @@ func main() {
 
 		if previewSc != nil {
 			div := win.New(listW, 1, 1, height-2)
-			div.Fill(vaxis.Cell{Character: vaxis.Character{Grapheme: "│", Width: 1}, Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
+			div.Fill(vaxis.Cell{Character: vaxis.Character{Grapheme: "│", Width: 1}, Style: vaxis.Style{Attribute: vaxis.AttrDim}})
 
 			previewSc.mu.Lock()
 			pv := previewSc.previewResult
@@ -707,13 +707,13 @@ func styledSegments(vx *vaxis.Vaxis, s string) []vaxis.Segment {
 
 func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 	footSegs := make([]vaxis.Segment, 0, len(conf.Scripts)*2)
-	footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Foreground: vaxis.ColorBlack}})
+	footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Attribute: vaxis.AttrDim}})
 
 	for _, sconf := range conf.Scripts {
 		if len(footSegs) > 1 {
 			footSegs = append(footSegs, vaxis.Segment{Text: " "})
 		}
-		var style = vaxis.Style{Foreground: vaxis.ColorBlack}
+		var style = vaxis.Style{Attribute: vaxis.AttrDim}
 		if slices.Contains(visScripts, sconf.Name) {
 			style = vaxis.Style{UnderlineStyle: vaxis.UnderlineSingle}
 		}
