@@ -29,10 +29,10 @@ import (
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
 
+	"github.com/BurntSushi/toml"
 	"go.rockorager.dev/vaxis"
 	vxspinner "go.rockorager.dev/vaxis/widgets/spinner"
 	"go.rockorager.dev/vaxis/widgets/textinput"
-	"github.com/BurntSushi/toml"
 )
 
 func main() {
@@ -286,6 +286,9 @@ func main() {
 		rows := height - 2
 
 		input.Update(ev)
+		if key, ok := ev.(vaxis.Key); ok && key.EventType != vaxis.EventRelease {
+			autoPair(input, key)
+		}
 		selectName, selected, scriptQuery, filterQuery := parseInput(input.String())
 
 		switch ev := ev.(type) {
@@ -563,6 +566,31 @@ func cycleScript(order []string, cur string, dir int) string {
 		i = 0
 	}
 	return order[(i+dir+len(order))%len(order)]
+}
+
+func autoPair(input *textinput.Model, key vaxis.Key) {
+	chars := input.Characters()
+	cursor := input.CursorPosition()
+
+	switch {
+	case key.Text == "[":
+		chars = slices.Insert(chars, cursor, vaxis.Characters("]")...)
+	case key.Text == "]" && cursor < len(chars) && chars[cursor].Grapheme == "]":
+		chars = slices.Delete(chars, cursor, cursor+1)
+	default:
+		return
+	}
+
+	var content strings.Builder
+	for _, char := range chars {
+		content.WriteString(char.Grapheme)
+	}
+
+	input.SetContent(content.String())
+	// SetContent parks the cursor at the end, and there is no way to place it directly
+	for range len(chars) - cursor {
+		input.Update(vaxis.Key{Keycode: vaxis.KeyLeft})
+	}
 }
 
 func displayText(script *script, text string) string {
