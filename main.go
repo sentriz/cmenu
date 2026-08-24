@@ -13,14 +13,12 @@ import (
 	_ "image/png"
 	"io"
 	"log/slog"
-	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -121,7 +119,7 @@ func main() {
 	}
 
 	var (
-		triggersOnStart  = map[ /* script name */ string]struct{}{}
+		triggersOnStart  [] /* script names */ string
 		triggersPrefix   = map[ /* prefix */ string] /* script names */ []string{}
 		triggersScript   = map[ /* script */ string] /* script names */ []string{}
 		triggersInterval = map[ /* script name */ string]time.Duration{}
@@ -130,7 +128,7 @@ func main() {
 		for _, trigger := range sconf.Triggers {
 			switch typ, value, _ := strings.Cut(trigger, " "); typ {
 			case "on-start":
-				triggersOnStart[sconf.Name] = struct{}{}
+				triggersOnStart = append(triggersOnStart, sconf.Name)
 			case "pre":
 				triggersPrefix[value] = append(triggersPrefix[value], sconf.Name)
 			case "script":
@@ -149,7 +147,7 @@ func main() {
 	}
 
 	slog.Info("loaded triggers",
-		"on_start", slices.Collect(maps.Keys(triggersOnStart)),
+		"on_start", triggersOnStart,
 		"prefix", triggersPrefix,
 		"script", triggersScript,
 		"interval", triggersInterval,
@@ -169,22 +167,25 @@ func main() {
 	spinner := newSpinner(vx, 125*time.Millisecond, "▌▀▐▄")
 	previewSpinner := newSpinner(vx, 125*time.Millisecond, "▌▀▐▄")
 
-	for scriptName := range triggersOnStart {
-		sconf := scripts[scriptName]
-
-		spinner.start()
-		go func() {
-			defer spinner.stop()
-
-			if err := loadScript(ctx, vx, nil, sconf, ""); err != nil {
-				vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
-				return
-			}
-		}()
+	const previewDebounce = 150 * time.Millisecond
+	for _, scriptName := range scriptOrder {
+		sc := scripts[scriptName]
+		sc.loads = make(chan loadReq, 1)
+		go worker(ctx, vx, sc.loads, sc.debounce, func(ctx context.Context, req loadReq) error {
+			return runLoad(ctx, vx, spinner, sc, req)
+		})
+		if sc.Preview {
+			sc.previews = make(chan previewReq, 1)
+			go worker(ctx, vx, sc.previews, previewDebounce, func(ctx context.Context, req previewReq) error {
+				return runPreview(ctx, vx, previewSpinner, sc, req)
+			})
+		}
 	}
 
-	// each interval-triggered script reloads itself on its own ticker, so
-	// the event loop doesn't need to drive periodic reloads
+	for _, scriptName := range triggersOnStart {
+		requestLoad(scripts[scriptName], "")
+	}
+
 	for scriptName, inter := range triggersInterval {
 		sc := scripts[scriptName]
 		go func() {
@@ -196,17 +197,7 @@ func main() {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					sc.mu.Lock()
-					loaded := !sc.lastLoaded.IsZero()
-					query := sc.lastQuery
-					sc.mu.Unlock()
-					if !loaded {
-						continue
-					}
-					if err := loadScript(ctx, vx, nil, sc, query); err != nil {
-						vx.PostEvent(eventQuitError(err))
-						return
-					}
+					vx.PostEvent(eventInterval{sc: sc})
 				}
 			}
 		}()
@@ -217,17 +208,12 @@ func main() {
 		SetPrompt("> ")
 	input.Prompt = vaxis.Style{Attribute: vaxis.AttrDim}
 
-	var lastScriptQuery string
-	var scriptQueryChangedAt time.Time
-
-	const previewDebounce = 150 * time.Millisecond
 	type previewKey struct {
 		sc     *script
 		line   string
 		loaded time.Time
 	}
 	var lastPreviewKey previewKey
-	var previewTimer *time.Timer
 	var imgState imageState
 
 	var index int
@@ -328,43 +314,31 @@ func main() {
 			case "Page_Up":
 				index = max(index-rows+1, 0)
 			case "Ctrl+r":
-				sconf, _, ok := active()
+				sc, _, ok := active()
 				if !ok {
 					break
 				}
-				sq := scriptQuery
-				go func() {
-					if err := loadScript(ctx, vx, spinner, sconf, sq); err != nil {
-						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
-						return
-					}
-				}()
+				requestLoad(sc, scriptQuery)
 			case "Enter", "Shift+Enter":
-				sconf, ln, ok := active()
-				if !ok {
+				sc, ln, ok := active()
+				if !ok || sc.executing {
 					break
 				}
-				stay := ln.style.stay || sconf.StayOpen || ev.Modifiers&vaxis.ModShift != 0
-				sq := scriptQuery
+				stay := ln.style.stay || sc.StayOpen || ev.Modifiers&vaxis.ModShift != 0
+				sc.executing = true
+				query, line := scriptQuery, ln.text
 				go func() {
-					if err := execScript(ctx, spinner, sconf, sq, ln.text); err != nil {
-						vx.PostEvent(quitErrorf("run script item for %q: %w", sconf.Name, err))
+					ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					defer cancel()
+
+					spinner.start()
+					err := makeCmd(ctx, sc, modeRun, query, line).Run()
+					spinner.stop()
+					if err != nil {
+						vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
 						return
 					}
-					if !stay {
-						vx.PostEvent(vaxis.QuitEvent{})
-						return
-					}
-					if err := loadScript(ctx, vx, spinner, sconf, sq); err != nil {
-						vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
-						return
-					}
-					for _, scriptName := range triggersScript[sconf.Name] {
-						if err := loadScript(ctx, vx, spinner, scripts[scriptName], sq); err != nil {
-							vx.PostEvent(quitErrorf("load script %q: %w", sconf.Name, err))
-							return
-						}
-					}
+					vx.PostEvent(eventExecDone{sc: sc, query: query, stay: stay})
 				}()
 			}
 		case vaxis.QuitEvent:
@@ -372,23 +346,32 @@ func main() {
 		case eventQuitError:
 			quitErr = ev
 			return
+		case eventLines:
+			if len(ev.lines) > 0 {
+				ev.sc.lines = ev.lines
+			}
+			ev.sc.lastLoaded = time.Now()
+			ev.sc.lastQuery = ev.query
+		case eventPreview:
+			ev.sc.previewResult = ev.pv
+			ev.sc.previewLine = ev.line
+		case eventExecDone:
+			ev.sc.executing = false
+			if !ev.stay {
+				return
+			}
+			requestLoad(ev.sc, ev.query)
+			for _, scriptName := range triggersScript[ev.sc.Name] {
+				requestLoad(scripts[scriptName], ev.query)
+			}
+		case eventInterval:
+			if !ev.sc.lastLoaded.IsZero() {
+				send(ev.sc.loads, loadReq{query: ev.sc.lastQuery, quiet: true})
+			}
 		case vaxis.SyncFunc:
 			ev()
 		case vaxis.Redraw:
 			imgState.settle()
-		}
-
-		if scriptQuery != lastScriptQuery {
-			lastScriptQuery = scriptQuery
-			scriptQueryChangedAt = time.Now()
-			for _, scriptName := range selectedScripts {
-				script := scripts[scriptName]
-				script.load.abort(scriptQuery)
-				// wake the loop when this script's debounce is up, a late wake is harmless
-				time.AfterFunc(script.debounce, func() {
-					vx.PostEvent(vaxis.SyncFunc(func() {}))
-				})
-			}
 		}
 
 		selectedScripts = selectedScripts[:0]
@@ -411,29 +394,16 @@ func main() {
 			filterQuery = after
 			selectScripts(scriptNames...)
 		default:
-			for _, scriptName := range scriptOrder {
-				if _, ok := triggersOnStart[scriptName]; ok {
-					selectedScripts = append(selectedScripts, scriptName)
-				}
-			}
+			selectedScripts = append(selectedScripts, triggersOnStart...)
 		}
 
-		// invoke scripts that haven't been run yet, or reload once the script query settles for their debounce
+		// invoke scripts that haven't been asked for this query yet, the worker debounces reloads
 		for _, scriptName := range selectedScripts {
 			script := scripts[scriptName]
-			if time.Since(scriptQueryChangedAt) < script.debounce {
+			if script.sentQuerySet && script.sentQuery == scriptQuery {
 				continue
 			}
-			if !script.lastLoaded.IsZero() && script.lastQuery == scriptQuery {
-				continue
-			}
-			sq := scriptQuery
-			go func() {
-				if err := loadScript(ctx, vx, spinner, script, sq); err != nil {
-					vx.PostEvent(eventQuitError(err))
-					return
-				}
-			}()
+			requestLoad(script, scriptQuery)
 		}
 
 		for fuzz := range 3 {
@@ -493,21 +463,10 @@ func main() {
 			key = previewKey{previewSc, previewLine, previewSc.lastLoaded}
 		}
 		if key != lastPreviewKey {
-			if lastPreviewKey.sc != nil {
-				lastPreviewKey.sc.preview.abort(key.line)
-			}
 			lastPreviewKey = key
-			if previewTimer != nil {
-				previewTimer.Stop()
-			}
 			if previewSc != nil {
-				sc, line, sq := previewSc, previewLine, scriptQuery
 				cols, rows := prevWin.Size()
-				previewTimer = time.AfterFunc(previewDebounce, func() {
-					if err := previewScript(ctx, vx, previewSpinner, sc, sq, line, cols, rows); err != nil {
-						vx.PostEvent(quitErrorf("preview script %q: %w", sc.Name, err))
-					}
-				})
+				send(previewSc.previews, previewReq{query: scriptQuery, line: previewLine, cols: cols, rows: rows})
 			}
 		}
 
@@ -527,10 +486,8 @@ func main() {
 			div := win.New(listW, 1, 1, height-2)
 			div.Fill(vaxis.Cell{Character: vaxis.Character{Grapheme: "│", Width: 1}, Style: vaxis.Style{Attribute: vaxis.AttrDim}})
 
-			previewSc.mu.Lock()
 			pv := previewSc.previewResult
 			ready := previewSc.previewLine == previewLine
-			previewSc.mu.Unlock()
 
 			if pv != nil && ready {
 				imgState.draw(prevWin, vx, pv)
@@ -555,42 +512,295 @@ func quitErrorf(f string, a ...any) error {
 	return eventQuitError(fmt.Errorf(f, a...))
 }
 
-const selectPrefix = "#"
-
-func cycleScript(order []string, cur string, dir int) string {
-	if len(order) == 0 {
-		return cur
-	}
-	i := slices.Index(order, cur)
-	if i < 0 && dir < 0 {
-		i = 0
-	}
-	return order[(i+dir+len(order))%len(order)]
+type eventLines struct {
+	sc    *script
+	query string
+	lines []string
 }
 
-func autoPair(input *textinput.Model, key vaxis.Key) {
-	chars := input.Characters()
-	cursor := input.CursorPosition()
+type eventPreview struct {
+	sc   *script
+	line string
+	pv   *preview
+}
 
-	switch {
-	case key.Text == "[":
-		chars = slices.Insert(chars, cursor, vaxis.Characters("]")...)
-	case key.Text == "]" && cursor < len(chars) && chars[cursor].Grapheme == "]":
-		chars = slices.Delete(chars, cursor, cursor+1)
+type eventExecDone struct {
+	sc    *script
+	query string
+	stay  bool
+}
+
+type eventInterval struct{ sc *script }
+
+type config struct {
+	Scripts []scriptConf `toml:"scripts"`
+}
+
+type scriptConf struct {
+	Triggers []string `toml:"triggers"`
+	Name     string   `toml:"name"`
+	Path     string   `toml:"path"`
+	Colour   int      `toml:"colour"`
+	Debounce string   `toml:"debounce"`
+	Columns  []int    `toml:"columns"`
+	StayOpen bool     `toml:"stay_open"`
+	Preview  bool     `toml:"preview"`
+}
+
+func parseConfig(path string) (config, error) {
+	configFile, err := os.Open(path)
+	if err != nil {
+		return config{}, err
+	}
+
+	var conf config
+	if _, err := toml.NewDecoder(configFile).Decode(&conf); err != nil {
+		return config{}, err
+	}
+
+	return conf, nil
+}
+
+type script struct {
+	scriptConf
+	debounce time.Duration
+	loads    chan loadReq
+	previews chan previewReq
+
+	executing     bool
+	lastLoaded    time.Time
+	lastQuery     string
+	sentQuery     string
+	sentQuerySet  bool
+	lines         []string
+	previewResult *preview
+	previewLine   string
+}
+
+// requestLoad debounces only when this is a reload for a changed query, so first
+// loads, Ctrl+r, and post-exec reloads run immediately
+func requestLoad(sc *script, query string) {
+	debounce := sc.sentQuerySet && sc.sentQuery != query
+	sc.sentQuery, sc.sentQuerySet = query, true
+	send(sc.loads, loadReq{query: query, debounce: debounce})
+}
+
+func send[T any](ch chan T, req T) {
+	for {
+		select {
+		case ch <- req:
+			return
+		default:
+			select {
+			case <-ch:
+			default:
+			}
+		}
+	}
+}
+
+type request interface{ debounced() bool }
+
+func worker[T request](ctx context.Context, vx *vaxis.Vaxis, reqs chan T, debounce time.Duration, run func(context.Context, T) error) {
+	var req T
+	var have bool
+	for {
+		if !have {
+			select {
+			case <-ctx.Done():
+				return
+			case req = <-reqs:
+			}
+		}
+		have = false
+
+		if req.debounced() {
+			timer := time.NewTimer(debounce)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case req = <-reqs:
+				timer.Stop()
+				have = true
+				continue
+			case <-timer.C:
+			}
+		}
+
+		runCtx, cancel := context.WithCancel(ctx)
+		errc := make(chan error, 1)
+		go func(req T) {
+			errc <- run(runCtx, req)
+		}(req)
+
+		select {
+		case req = <-reqs:
+			cancel()
+			<-errc
+			have = true
+		case err := <-errc:
+			cancel()
+			if err != nil {
+				vx.PostEvent(eventQuitError(err))
+				return
+			}
+		case <-ctx.Done():
+			cancel()
+			<-errc
+			return
+		}
+	}
+}
+
+type loadReq struct {
+	query    string
+	debounce bool
+	quiet    bool
+}
+
+func (r loadReq) debounced() bool { return r.debounce }
+
+func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, req loadReq) error {
+	if !req.quiet {
+		spinner.start()
+		defer spinner.stop()
+	}
+
+	lines, err := loadScript(ctx, sc, req.query)
+	if err != nil {
+		return fmt.Errorf("load script %q: %w", sc.Name, err)
+	}
+	if ctx.Err() == nil {
+		vx.PostEvent(eventLines{sc: sc, query: req.query, lines: lines})
+	}
+	return nil
+}
+
+func loadScript(ctx context.Context, sc *script, query string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+
+	cmd := makeCmd(ctx, sc, modeList, query, "")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	var lines []string
+	bs := bufio.NewScanner(stdout)
+	for bs.Scan() {
+		lines = append(lines, bs.Text())
+	}
+	if err := bs.Err(); err != nil {
+		return nil, err
+	}
+	if err := cmd.Wait(); err != nil {
+		if ctx.Err() != nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	slog.InfoContext(ctx, "loaded script", "script", sc.Name, "num_lines", len(lines), "took_ms", time.Since(start).Milliseconds())
+	return lines, nil
+}
+
+type previewReq struct {
+	query, line string
+	cols, rows  int
+}
+
+func (previewReq) debounced() bool { return true }
+
+func runPreview(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, req previewReq) error {
+	spinner.start()
+	defer spinner.stop()
+
+	pv, err := previewScript(ctx, sc, req)
+	if err != nil {
+		return fmt.Errorf("preview script %q: %w", sc.Name, err)
+	}
+	if pv != nil {
+		vx.PostEvent(eventPreview{sc: sc, line: req.line, pv: pv})
+	}
+	return nil
+}
+
+func previewScript(ctx context.Context, sc *script, req previewReq) (*preview, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	out, err := makeCmd(ctx, sc, modePreview, req.query, req.line,
+		fmt.Sprintf("CMENU_PREVIEW_COLS=%d", req.cols),
+		fmt.Sprintf("CMENU_PREVIEW_LINES=%d", req.rows),
+	).Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return parsePreview(out)
+}
+
+type preview struct {
+	text string
+	img  image.Image
+}
+
+func parsePreview(out []byte) (*preview, error) {
+	kind, payload, _, ok := cutOSC(string(out))
+	if !ok {
+		return &preview{text: string(out)}, nil
+	}
+
+	var r io.Reader
+	switch kind {
+	case markerImageData:
+		r = base64.NewDecoder(base64.StdEncoding, strings.NewReader(payload))
+	case markerImagePath:
+		f, err := os.Open(payload)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		r = f
 	default:
-		return
+		return &preview{text: string(out)}, nil
 	}
 
-	var content strings.Builder
-	for _, char := range chars {
-		content.WriteString(char.Grapheme)
+	img, _, err := image.Decode(r)
+	if err != nil {
+		return nil, err
 	}
+	return &preview{img: img}, nil
+}
 
-	input.SetContent(content.String())
-	// SetContent parks the cursor at the end, and there is no way to place it directly
-	for range len(chars) - cursor {
-		input.Update(vaxis.Key{Keycode: vaxis.KeyLeft})
+const (
+	modeList    = "list"
+	modeRun     = "run"
+	modePreview = "preview"
+)
+
+func makeCmd(ctx context.Context, sc *script, mode, query, line string, extraEnv ...string) *exec.Cmd {
+	var args []string
+	if line != "" {
+		args = append(args, line)
 	}
+	cmd := exec.CommandContext(ctx, sc.Path, args...)
+	cmd.Env = append(cmd.Environ(), "CMENU_MODE="+mode, "CMENU_INPUT="+query)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	cmd.WaitDelay = 100 * time.Millisecond
+	return cmd
 }
 
 func displayText(script *script, text string) string {
@@ -634,37 +844,13 @@ func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle
 	)
 }
 
-type preview struct {
-	text string
-	img  image.Image
-}
-
-func parsePreview(out []byte) (*preview, error) {
-	kind, payload, _, ok := cutOSC(string(out))
-	if !ok {
-		return &preview{text: string(out)}, nil
+// avoiding fmt.Sprintf in a hot loop
+func padRight(s string, p string, width int) string {
+	gap := width - len(s)
+	if gap <= 0 {
+		return s
 	}
-
-	var r io.Reader
-	switch kind {
-	case markerImageData:
-		r = base64.NewDecoder(base64.StdEncoding, strings.NewReader(payload))
-	case markerImagePath:
-		f, err := os.Open(payload)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		r = f
-	default:
-		return &preview{text: string(out)}, nil
-	}
-
-	img, _, err := image.Decode(r)
-	if err != nil {
-		return nil, err
-	}
-	return &preview{img: img}, nil
+	return s + strings.Repeat(p, gap)
 }
 
 // imageState double-buffers preview images so swaps never blank: the old image
@@ -751,176 +937,36 @@ func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 	win.Println(0, footSegs...)
 }
 
-type script struct {
-	scriptConf
-	debounce   time.Duration
-	mu         sync.Mutex
-	load       taskSlot
-	preview    taskSlot
-	executing  atomic.Bool
-	lastLoaded time.Time
-	lastQuery  string
-	lines      []string
-
-	previewResult *preview
-	previewLine   string
+type spinner struct {
+	model *vxspinner.Model
+	count atomic.Int32
 }
 
-func loadScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, query string) error {
-	ctx, gen, ok := sc.load.take(ctx, query)
-	if !ok {
-		return nil
+func newSpinner(vx *vaxis.Vaxis, duration time.Duration, frames string) *spinner {
+	model := vxspinner.New(vx, duration)
+	model.Frames = []rune(frames)
+	return &spinner{
+		model: model,
 	}
-
-	// hold the slot until the result is published, else the event loop sees a script
-	// with no result and no load in flight, and starts a duplicate
-	var releaseLater bool
-	defer func() {
-		if !releaseLater {
-			sc.load.release(gen)
-		}
-	}()
-
-	ctx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelTimeout()
-
-	if spinner != nil {
-		spinner.start()
-		defer spinner.stop()
-	}
-
-	start := time.Now()
-
-	cmd := makeCmd(ctx, sc, modeList, query, "")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	var lines []string
-	bs := bufio.NewScanner(stdout)
-	for bs.Scan() {
-		lines = append(lines, bs.Text())
-	}
-	if err := bs.Err(); err != nil {
-		return err
-	}
-	if err := cmd.Wait(); err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return err
-	}
-
-	slog.InfoContext(ctx, "loaded script", "script", sc.Name, "num_lines", len(lines), "took_ms", time.Since(start).Milliseconds())
-
-	releaseLater = true
-	vx.SyncFunc(func() {
-		defer sc.load.release(gen)
-		if !sc.load.current(gen) {
-			return
-		}
-		sc.mu.Lock()
-		defer sc.mu.Unlock()
-		if len(lines) > 0 {
-			sc.lines = lines
-		}
-		sc.lastLoaded = time.Now()
-		sc.lastQuery = query
-	})
-
-	return nil
 }
 
-func execScript(parent context.Context, spinner *spinner, sc *script, query, text string) error {
-	if !sc.executing.CompareAndSwap(false, true) {
-		return nil
+func (s *spinner) start() {
+	if s.count.Add(1) == 1 {
+		s.model.Start()
 	}
-	defer sc.executing.Store(false)
-
-	if spinner != nil {
-		spinner.start()
-		defer spinner.stop()
-	}
-
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
-	defer cancel()
-
-	return makeCmd(ctx, sc, modeRun, query, text).Run()
 }
 
-func previewScript(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, query, line string, cols, rows int) error {
-	ctx, gen, ok := sc.preview.take(ctx, line)
-	if !ok {
-		return nil
+func (s *spinner) stop() {
+	if s.count.Add(-1) == 0 {
+		s.model.Stop()
 	}
-	defer sc.preview.release(gen)
-
-	ctx, cancelTimeout := context.WithTimeout(ctx, 30*time.Second)
-	defer cancelTimeout()
-
-	if spinner != nil {
-		spinner.start()
-		defer spinner.stop()
-	}
-
-	out, err := makeCmd(ctx, sc, modePreview, query, line,
-		fmt.Sprintf("CMENU_PREVIEW_COLS=%d", cols),
-		fmt.Sprintf("CMENU_PREVIEW_LINES=%d", rows),
-	).Output()
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return err
-	}
-
-	pv, err := parsePreview(out)
-	if err != nil {
-		return err
-	}
-
-	vx.SyncFunc(func() {
-		if !sc.preview.current(gen) {
-			return
-		}
-		sc.mu.Lock()
-		defer sc.mu.Unlock()
-		sc.previewResult = pv
-		sc.previewLine = line
-	})
-
-	return nil
 }
 
-const (
-	modeList    = "list"
-	modeRun     = "run"
-	modePreview = "preview"
-)
-
-func makeCmd(ctx context.Context, sc *script, mode, query, line string, extraEnv ...string) *exec.Cmd {
-	var args []string
-	if line != "" {
-		args = append(args, line)
-	}
-	cmd := exec.CommandContext(ctx, sc.Path, args...)
-	cmd.Env = append(cmd.Environ(), "CMENU_MODE="+mode, "CMENU_INPUT="+query)
-	cmd.Env = append(cmd.Env, extraEnv...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
-	cmd.WaitDelay = 100 * time.Millisecond
-	return cmd
+func (s *spinner) draw(w vaxis.Window) {
+	s.model.Draw(w)
 }
 
-func clamp[T cmp.Ordered](v, mn, mx T) T {
-	v = max(v, mn)
-	v = min(v, mx)
-	return v
-}
+const selectPrefix = "#"
 
 // parseInput splits input like "#calc cc [1+3] 4" into the selected script name "calc",
 // scriptQuery "1+3" and filterQuery "cc 4". a leading selectPrefix always selects by name,
@@ -942,6 +988,42 @@ func parseInput(s string) (selectName string, selected bool, scriptQuery, filter
 	scriptQuery = s[open+1 : cl]
 	filterQuery = strings.Join(strings.Fields(s[:open]+" "+s[cl+1:]), " ")
 	return selectName, selected, scriptQuery, filterQuery
+}
+
+func autoPair(input *textinput.Model, key vaxis.Key) {
+	chars := input.Characters()
+	cursor := input.CursorPosition()
+
+	switch {
+	case key.Text == "[":
+		chars = slices.Insert(chars, cursor, vaxis.Characters("]")...)
+	case key.Text == "]" && cursor < len(chars) && chars[cursor].Grapheme == "]":
+		chars = slices.Delete(chars, cursor, cursor+1)
+	default:
+		return
+	}
+
+	var content strings.Builder
+	for _, char := range chars {
+		content.WriteString(char.Grapheme)
+	}
+
+	input.SetContent(content.String())
+	// SetContent parks the cursor at the end, and there is no way to place it directly
+	for range len(chars) - cursor {
+		input.Update(vaxis.Key{Keycode: vaxis.KeyLeft})
+	}
+}
+
+func cycleScript(order []string, cur string, dir int) string {
+	if len(order) == 0 {
+		return cur
+	}
+	i := slices.Index(order, cur)
+	if i < 0 && dir < 0 {
+		i = 0
+	}
+	return order[(i+dir+len(order))%len(order)]
 }
 
 // matches reports whether every query token appears in text, with increasing tolerance per fuzz level:
@@ -1000,6 +1082,7 @@ type lineStyle struct {
 
 // escape code is 6366, or the first 4 numbers of ASCII "cmenu" in hex
 const oscPrefix = "\x1b]6366;"
+
 const oscTerm = "\x07"
 
 // marker kinds shared between the emit subcommands in main and the parsers
@@ -1044,133 +1127,8 @@ func parseLineStyle(raw string) (text string, style lineStyle) {
 	return text, style
 }
 
-type spinner struct {
-	model *vxspinner.Model
-	count atomic.Int32
-}
-
-func newSpinner(vx *vaxis.Vaxis, duration time.Duration, frames string) *spinner {
-	model := vxspinner.New(vx, duration)
-	model.Frames = []rune(frames)
-	return &spinner{
-		model: model,
-	}
-}
-
-func (s *spinner) start() {
-	if s.count.Add(1) == 1 {
-		s.model.Start()
-	}
-}
-
-func (s *spinner) stop() {
-	if s.count.Add(-1) == 0 {
-		s.model.Stop()
-	}
-}
-
-func (s *spinner) draw(w vaxis.Window) {
-	s.model.Draw(w)
-}
-
-// avoiding fmt.Sprintf in a hot loop
-func padRight(s string, p string, width int) string {
-	gap := width - len(s)
-	if gap <= 0 {
-		return s
-	}
-	return s + strings.Repeat(p, gap)
-}
-
-type config struct {
-	Scripts []scriptConf `toml:"scripts"`
-}
-
-type scriptConf struct {
-	Triggers []string `toml:"triggers"`
-	Name     string   `toml:"name"`
-	Path     string   `toml:"path"`
-	Colour   int      `toml:"colour"`
-	Debounce string   `toml:"debounce"`
-	Columns  []int    `toml:"columns"`
-	StayOpen bool     `toml:"stay_open"`
-	Preview  bool     `toml:"preview"`
-}
-
-func parseConfig(path string) (config, error) {
-	configFile, err := os.Open(path)
-	if err != nil {
-		return config{}, err
-	}
-
-	var conf config
-	if _, err := toml.NewDecoder(configFile).Decode(&conf); err != nil {
-		return config{}, err
-	}
-
-	return conf, nil
-}
-
-// taskSlot runs at most one task at a time. take starts a new task: if a task with the
-// same key is already running, it returns ok=false. if a task with a different key is
-// running, that task's context is cancelled
-type taskSlot struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	key    string
-	gen    uint64
-}
-
-func (t *taskSlot) take(ctx context.Context, key string) (context.Context, uint64, bool) {
-	t.mu.Lock()
-	if t.cancel != nil && t.key == key {
-		t.mu.Unlock()
-		return nil, 0, false
-	}
-	prev := t.cancel
-	ctx, cancel := context.WithCancel(ctx)
-	t.cancel = cancel
-	t.gen++
-	gen := t.gen
-	t.key = key
-	t.mu.Unlock()
-
-	if prev != nil {
-		prev()
-	}
-	return ctx, gen, true
-}
-
-func (t *taskSlot) abort(key string) {
-	t.mu.Lock()
-	var cancel context.CancelFunc
-	if t.cancel != nil && t.key != key {
-		cancel = t.cancel
-	}
-	t.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func (t *taskSlot) release(gen uint64) {
-	var cancel context.CancelFunc
-	t.mu.Lock()
-	if t.gen == gen {
-		cancel = t.cancel
-		t.cancel = nil
-		t.key = ""
-	}
-	t.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func (t *taskSlot) current(gen uint64) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.gen == gen
+func clamp[T cmp.Ordered](v, mn, mx T) T {
+	v = max(v, mn)
+	v = min(v, mx)
+	return v
 }
