@@ -351,7 +351,6 @@ func main() {
 				ev.sc.lines = ev.lines
 			}
 			ev.sc.lastLoaded = time.Now()
-			ev.sc.lastQuery = ev.query
 		case eventPreview:
 			ev.sc.previewResult = ev.pv
 			ev.sc.previewLine = ev.line
@@ -366,7 +365,7 @@ func main() {
 			}
 		case eventInterval:
 			if !ev.sc.lastLoaded.IsZero() {
-				send(ev.sc.loads, loadReq{query: ev.sc.lastQuery, quiet: true})
+				send(ev.sc.loads, loadReq{query: ev.sc.sentQuery, quiet: true})
 			}
 		case vaxis.SyncFunc:
 			ev()
@@ -514,7 +513,6 @@ func quitErrorf(f string, a ...any) error {
 
 type eventLines struct {
 	sc    *script
-	query string
 	lines []string
 }
 
@@ -569,7 +567,6 @@ type script struct {
 
 	executing     bool
 	lastLoaded    time.Time
-	lastQuery     string
 	sentQuery     string
 	sentQuerySet  bool
 	lines         []string
@@ -672,7 +669,7 @@ func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script,
 		return fmt.Errorf("load script %q: %w", sc.Name, err)
 	}
 	if ctx.Err() == nil {
-		vx.PostEvent(eventLines{sc: sc, query: req.query, lines: lines})
+		vx.PostEvent(eventLines{sc: sc, lines: lines})
 	}
 	return nil
 }
