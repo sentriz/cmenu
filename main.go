@@ -271,9 +271,13 @@ func main() {
 		width, height := win.Size()
 		rows := height - 2
 
-		input.Update(ev)
-		if key, ok := ev.(vaxis.Key); ok && key.EventType != vaxis.EventRelease {
-			autoPair(input, key)
+		inputKey, keyDown := ev.(vaxis.Key)
+		keyDown = keyDown && inputKey.EventType != vaxis.EventRelease
+		if !keyDown || !deleteBracketInput(input, inputKey) {
+			input.Update(ev)
+		}
+		if keyDown {
+			autoPair(input, inputKey)
 		}
 		selectName, selected, scriptQuery, filterQuery := parseInput(input.String())
 
@@ -963,7 +967,11 @@ func (s *spinner) draw(w vaxis.Window) {
 	s.model.Draw(w)
 }
 
-const selectPrefix = "#"
+const (
+	selectPrefix     = "#"
+	scriptInputOpen  = "["
+	scriptInputClose = "]"
+)
 
 // parseInput splits input like "#calc cc [1+3] 4" into the selected script name "calc",
 // scriptQuery "1+3" and filterQuery "cc 4". a leading selectPrefix always selects by name,
@@ -973,11 +981,11 @@ func parseInput(s string) (selectName string, selected bool, scriptQuery, filter
 		selected = true
 		selectName, s, _ = strings.Cut(rest, " ")
 	}
-	open := strings.Index(s, "[")
+	open := strings.Index(s, scriptInputOpen)
 	if open < 0 {
 		return selectName, selected, "", s
 	}
-	cl := strings.Index(s[open:], "]")
+	cl := strings.Index(s[open:], scriptInputClose)
 	if cl < 0 {
 		return selectName, selected, "", s
 	}
@@ -987,19 +995,50 @@ func parseInput(s string) (selectName string, selected bool, scriptQuery, filter
 	return selectName, selected, scriptQuery, filterQuery
 }
 
+func deleteBracketInput(input *textinput.Model, key vaxis.Key) bool {
+	if key.String() != "Ctrl+w" {
+		return false
+	}
+
+	chars := input.Characters()
+	cursor := input.CursorPosition()
+	if cursor == 0 || chars[cursor-1].Grapheme != scriptInputClose {
+		return false
+	}
+
+	depth := 0
+	for i := cursor - 1; i >= 0; i-- {
+		switch chars[i].Grapheme {
+		case scriptInputClose:
+			depth++
+		case scriptInputOpen:
+			depth--
+			if depth == 0 {
+				setInput(input, slices.Delete(chars, i, cursor), i)
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func autoPair(input *textinput.Model, key vaxis.Key) {
 	chars := input.Characters()
 	cursor := input.CursorPosition()
 
 	switch {
-	case key.Text == "[":
-		chars = slices.Insert(chars, cursor, vaxis.Characters("]")...)
-	case key.Text == "]" && cursor < len(chars) && chars[cursor].Grapheme == "]":
+	case key.Text == scriptInputOpen:
+		chars = slices.Insert(chars, cursor, vaxis.Characters(scriptInputClose)...)
+	case key.Text == scriptInputClose && cursor < len(chars) && chars[cursor].Grapheme == scriptInputClose:
 		chars = slices.Delete(chars, cursor, cursor+1)
 	default:
 		return
 	}
 
+	setInput(input, chars, cursor)
+}
+
+func setInput(input *textinput.Model, chars []vaxis.Character, cursor int) {
 	var content strings.Builder
 	for _, char := range chars {
 		content.WriteString(char.Grapheme)
