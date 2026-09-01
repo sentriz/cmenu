@@ -1,9 +1,9 @@
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/rockorager/go-uucode v1.2.0 h1:xwUIndxE+z1PIrWALT7unu4L8x27qMsC/5X3aonJo6o=
-github.com/rockorager/go-uucode v1.2.0/go.mod h1:0BZXIGRvWIHt1ruBeViNGcuKyQ3+BRHQbgyXkqRCz38=
-go.rockorager.dev/vaxis v0.17.1 h1:GE71riV9xp2rFDNqUDHU8JyoSOYHaC5G6zKte17oWbA=
-go.rockorager.dev/vaxis v0.17.1/go.mod h1:5VpvRiT7INHD7fpN3G/z6c7A/tGwcIMaSyHdUwphKbI=
+github.com/rockorager/go-uucode v1.2.2 h1:bqVVrZtdwb8v4OB5BIw/aSAKXvGMbOjQwDTHsRC7XhU=
+github.com/rockorager/go-uucode v1.2.2/go.mod h1:0BZXIGRvWIHt1ruBeViNGcuKyQ3+BRHQbgyXkqRCz38=
+go.rockorager.dev/vaxis v0.17.2-0.20260901185654-08d2ed0bce52 h1:Am0ey9hZ1L3IGr6nCCDSqHtSQbRVpaJvzTJOL2eeqH0=
+go.rockorager.dev/vaxis v0.17.2-0.20260901185654-08d2ed0bce52/go.mod h1:ExFg9zTJidjhdTJAs0tGEneoTEWM2X3aTMvMtgulWlc=
 golang.org/x/image v0.45.0 h1:FMb1nTbH5H9vF55SriQHgFw5GnNL9Jg6L25BwXKzhB0=
 golang.org/x/image v0.45.0/go.mod h1:n62x/7RqlwXDvGsSU4u6IUTUf6KghUZ9Bt7cG/T9Fx4=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
