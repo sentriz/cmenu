@@ -55,6 +55,10 @@ func main() {
 		case markerHighlight, markerStay, markerLabel:
 			fmt.Print(oscPrefix + cmd + oscTerm)
 			return
+		case markerData:
+			// brings its own tab so scripts don't place one themselves
+			fmt.Print("\t" + oscPrefix + cmd + oscTerm)
+			return
 		case "image":
 			if len(os.Args) != 3 {
 				quitErr = fmt.Errorf("image needs argument")
@@ -221,8 +225,8 @@ func main() {
 	var selectedScripts []string
 
 	type line struct {
-		script, text string
-		style        lineStyle
+		script string
+		item
 	}
 
 	var visScripts []string
@@ -424,10 +428,9 @@ func main() {
 				script := scripts[scriptName]
 
 				var scriptVisible bool
-				for _, item := range script.lines {
-					text, style := parseLineStyle(item)
-					if filterQuery == "" || matches(displayText(script, text), filterQuery, fuzz) {
-						visLines = append(visLines, line{script: scriptName, text: text, style: style})
+				for _, it := range script.lines {
+					if filterQuery == "" || matches(it.display, filterQuery, fuzz) {
+						visLines = append(visLines, line{script: scriptName, item: it})
 						scriptVisible = true
 					}
 				}
@@ -469,7 +472,7 @@ func main() {
 		var firstRow, lastRow int
 		for i, ln := range visLines {
 			sc := scripts[ln.script]
-			text := displayText(sc, ln.text)
+			text := ln.display
 
 			chunks := []string{text}
 			if sc.Wrap {
@@ -543,7 +546,7 @@ func quitErrorf(f string, a ...any) error {
 
 type eventLines struct {
 	sc    *script
-	lines []string
+	lines []item
 }
 
 type eventPreview struct {
@@ -570,7 +573,6 @@ type scriptConf struct {
 	Path     string   `toml:"path"`
 	Colour   int      `toml:"colour"`
 	Debounce string   `toml:"debounce"`
-	Columns  []int    `toml:"columns"`
 	Wrap     bool     `toml:"wrap"`
 	StayOpen bool     `toml:"stay_open"`
 	Preview  bool     `toml:"preview"`
@@ -600,9 +602,15 @@ type script struct {
 	lastLoaded    time.Time
 	sentQuery     string
 	sentQuerySet  bool
-	lines         []string
+	lines         []item
 	previewResult *preview
 	previewLine   string
+}
+
+type item struct {
+	text    string // the line as the script printed it, markers removed
+	display string // the part before the data marker, padded into columns
+	style   lineStyle
 }
 
 // requestLoad debounces only when this is a reload for a changed query, so first
@@ -705,7 +713,7 @@ func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script,
 	return nil
 }
 
-func loadScript(ctx context.Context, sc *script, query string) ([]string, error) {
+func loadScript(ctx context.Context, sc *script, query string) ([]item, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -736,7 +744,7 @@ func loadScript(ctx context.Context, sc *script, query string) ([]string, error)
 	}
 
 	slog.InfoContext(ctx, "loaded script", "script", sc.Name, "num_lines", len(lines), "took_ms", time.Since(start).Milliseconds())
-	return lines, nil
+	return parseItems(lines), nil
 }
 
 type previewReq struct {
@@ -831,18 +839,57 @@ func makeCmd(ctx context.Context, sc *script, mode, query, line string, extraEnv
 	return cmd
 }
 
-func displayText(script *script, text string) string {
-	if len(script.Columns) == 0 {
-		return strings.ReplaceAll(text, "\t", " ")
+// parseItems hides each line's payload and pads the columns left over so that rows of the
+// same shape line up. Labels are prose rather than table rows, so they take no part
+func parseItems(raw []string) []item {
+	items := make([]item, 0, len(raw))
+	columns := make([][]string, 0, len(raw))
+	for _, r := range raw {
+		text, visible, style := parseLine(r)
+		items = append(items, item{text: text, style: style})
+		columns = append(columns, strings.Split(visible, "\t"))
 	}
-	columns := strings.Split(text, "\t")
-	filtered := make([]string, 0, len(columns))
-	for _, c := range script.Columns { // 1 indexed display columns
-		if i := c - 1; i <= len(columns)-1 {
-			filtered = append(filtered, columns[i])
+
+	var widths []int
+	for i, cols := range columns {
+		if items[i].style.label {
+			continue
+		}
+		if widths == nil {
+			widths = make([]int, len(cols))
+		}
+		if len(cols) != len(widths) {
+			continue
+		}
+		for c, col := range cols {
+			widths[c] = max(widths[c], textWidth(col))
 		}
 	}
-	return strings.Join(filtered, " ")
+
+	for i, cols := range columns {
+		pad := !items[i].style.label && len(cols) == len(widths)
+		var sb strings.Builder
+		for c, col := range cols {
+			if c > 0 {
+				sb.WriteString(" ")
+			}
+			sb.WriteString(col)
+			if pad && c < len(cols)-1 {
+				sb.WriteString(strings.Repeat(" ", widths[c]-textWidth(col)))
+			}
+		}
+		items[i].display = sb.String()
+	}
+
+	return items
+}
+
+func textWidth(text string) int {
+	var width int
+	for _, char := range vaxis.Characters(text) {
+		width += char.Width
+	}
+	return width
 }
 
 const linePrefix = 15
@@ -1199,6 +1246,7 @@ const (
 	markerHighlight = "highlight"
 	markerStay      = "stay"
 	markerLabel     = "label"
+	markerData      = "data"
 	markerImageData = "image-data"
 	markerImagePath = "image-path"
 )
@@ -1216,14 +1264,17 @@ func cutOSC(s string) (kind, payload, rest string, ok bool) {
 	return kind, payload, rest, true
 }
 
-func parseLineStyle(raw string) (text string, style lineStyle) {
-	text = raw
+// parseLine returns the line with its markers removed, and the part of it that is shown.
+// The data marker brought its own tab, so that tab separates the payload rather than
+// ending a column of its own
+func parseLine(raw string) (text, visible string, style lineStyle) {
+	text, rest, hasData := strings.Cut(raw, oscPrefix+markerData+oscTerm)
 	for {
-		kind, _, rest, ok := cutOSC(text)
+		kind, _, stripped, ok := cutOSC(text)
 		if !ok {
 			break
 		}
-		text = rest
+		text = stripped
 		switch kind {
 		case markerHighlight:
 			style.highlight = true
@@ -1233,7 +1284,13 @@ func parseLineStyle(raw string) (text string, style lineStyle) {
 			style.label = true
 		}
 	}
-	return text, style
+
+	visible = text
+	if hasData {
+		visible = strings.TrimSuffix(text, "\t")
+	}
+	text += rest
+	return text, visible, style
 }
 
 func clamp[T cmp.Ordered](v, mn, mx T) T {

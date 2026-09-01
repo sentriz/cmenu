@@ -75,7 +75,6 @@ Config lives in `$XDG_CONFIG_HOME/cmenu/config.toml`, and is a list of scripts.
   name = "pass"
   path = "menu-pass"
   colour = 12
-  columns = [2, 3, 4]
   preview = true
 ```
 
@@ -85,7 +84,6 @@ Config lives in `$XDG_CONFIG_HOME/cmenu/config.toml`, and is a list of scripts.
 | `name`      | Name shown in the gutter, and referenced by `script` triggers          |
 | `path`      | Path to the script, looked up in `$PATH` if not absolute               |
 | `colour`    | Terminal colour (0-15) for the script's lines                          |
-| `columns`   | Which tab-separated columns of each line to display, e.g. `[2, 3]`     |
 | `wrap`      | Wrap long lines over multiple rows instead of truncating them          |
 | `stay_open` | Keep cmenu open after running a selection, and reload the script       |
 | `preview`   | Run the script in preview mode for the selected line                   |
@@ -157,15 +155,33 @@ A script doesn't need a prefix. If the input starts with `#`, the next word is a
 
 #### Markers
 
-Lines are plain text, tab-separated if you want columns. A few markers are available as subcommands, printed as part of a line:
+Lines are plain text, tab-separated if you want columns, which cmenu pads so they line up. A few markers are available as subcommands, printed as part of a line:
 
 | Command              | Description                                          |
 | -------------------- | ---------------------------------------------------- |
 | `cmenu highlight`    | Mark this line as current, e.g. the connected device |
 | `cmenu label`        | Mark this line as a non-selectable label             |
 | `cmenu stay`         | Keep cmenu open after running this line              |
+| `cmenu data`         | Hide the rest of the line, see [payloads](#payloads) |
 | `cmenu image <path>` | In preview mode, render an image instead of text     |
 | `cmenu image -`      | Same, reading the image from stdin                   |
+
+#### Payloads
+
+Lines often carry an ID or a command you don't want shown. Print `cmenu data` where the visible part ends. The rest of the line is hidden from the list, from filtering, and from column widths. It brings its own tab, so don't add one:
+
+```bash
+data="$(cmenu data)"
+
+rbw list --fields folder --fields name --fields user --fields id \
+    | awk -F'\t' -v d="$data" '{ printf "%s\t%s\t%s%s%s\n", $1, $2, $3, d, $4 }'
+```
+
+Hoist it into a variable like that rather than calling it per line. Your script gets the whole line back in `$1`, so hidden fields are read like any other:
+
+```bash
+IFS=$'\t' read -r _ _ _ id <<<"$1"
+```
 
 ---
 
@@ -254,6 +270,6 @@ It's similar, but there are no extensions or integrations - cmenu only renders l
 <details>
 <summary>How do I hide the ID column I use for lookups?</summary>
 
-Print it as a tab-separated column and use `columns` to display only the ones you want, e.g. `columns = [2, 3]`. Your script still gets the full line back in `$1`.
+Put it after `cmenu data`, see [payloads](#payloads). Your script still gets the full line back in `$1`.
 
 </details>
