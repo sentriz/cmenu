@@ -86,6 +86,7 @@ Config lives in `$XDG_CONFIG_HOME/cmenu/config.toml`, and is a list of scripts.
 | `path`      | Path to the script, looked up in `$PATH` if not absolute               |
 | `colour`    | Terminal colour (0-15) for the script's lines                          |
 | `columns`   | Which tab-separated columns of each line to display, e.g. `[2, 3]`     |
+| `wrap`      | Wrap long lines over multiple rows instead of truncating them          |
 | `stay_open` | Keep cmenu open after running a selection, and reload the script       |
 | `preview`   | Run the script in preview mode for the selected line                   |
 | `debounce`  | How long to wait for typing to settle before reloading, e.g. `"300ms"` |

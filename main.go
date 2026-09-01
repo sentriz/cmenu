@@ -228,6 +228,13 @@ func main() {
 	var visScripts []string
 	var visLines []line
 
+	type row struct {
+		line int
+		text string
+		cont bool
+	}
+	var visRows []row
+
 	active := func() (*script, line, bool) {
 		if index < 0 || index >= len(visLines) || visLines[index].style.label {
 			return nil, line{}, false
@@ -444,9 +451,6 @@ func main() {
 			}
 		}
 
-		scroll = clamp(scroll, index-rows+1, index)
-		scroll = clamp(scroll, 0, max(0, len(visLines)-rows))
-
 		var previewSc *script
 		var previewLine string
 		if sc, ln, ok := active(); ok && sc.Preview {
@@ -460,6 +464,27 @@ func main() {
 			listW = width / 2
 			prevWin = win.New(listW+1, 1, width-listW-1, height-2)
 		}
+
+		visRows = visRows[:0]
+		var firstRow, lastRow int
+		for i, ln := range visLines {
+			sc := scripts[ln.script]
+			text := displayText(sc, ln.text)
+
+			chunks := []string{text}
+			if sc.Wrap {
+				chunks = wrapText(text, listW-linePrefix)
+			}
+			if i == index {
+				firstRow, lastRow = len(visRows), len(visRows)+len(chunks)-1
+			}
+			for j, chunk := range chunks {
+				visRows = append(visRows, row{line: i, text: chunk, cont: j > 0})
+			}
+		}
+
+		scroll = clamp(scroll, lastRow-rows+1, firstRow)
+		scroll = clamp(scroll, 0, max(0, len(visRows)-rows))
 
 		var key previewKey
 		if previewSc != nil {
@@ -480,9 +505,10 @@ func main() {
 		spinner.draw(spinWin)
 
 		listWin := win.New(0, 1, listW, rows)
-		for i := scroll; i < len(visLines) && i-scroll < rows; i++ {
-			it := visLines[i]
-			drawLine(listWin, i-scroll, scripts[it.script], it.text, it.style, i == index && !it.style.label)
+		for i := scroll; i < len(visRows) && i-scroll < rows; i++ {
+			r := visRows[i]
+			it := visLines[r.line]
+			drawLine(listWin, i-scroll, scripts[it.script], r.text, it.style, r.line == index && !it.style.label, r.cont)
 		}
 
 		if previewSc != nil {
@@ -545,6 +571,7 @@ type scriptConf struct {
 	Colour   int      `toml:"colour"`
 	Debounce string   `toml:"debounce"`
 	Columns  []int    `toml:"columns"`
+	Wrap     bool     `toml:"wrap"`
 	StayOpen bool     `toml:"stay_open"`
 	Preview  bool     `toml:"preview"`
 }
@@ -818,9 +845,9 @@ func displayText(script *script, text string) string {
 	return strings.Join(filtered, " ")
 }
 
-func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected bool) {
-	text = displayText(script, text)
+const linePrefix = 15
 
+func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected, cont bool) {
 	var col string = "▌"
 	if ls.highlight {
 		col = "█"
@@ -837,12 +864,58 @@ func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle
 		style.Attribute |= vaxis.AttrDim
 	}
 
+	name := script.Name
+	if cont {
+		name = ""
+	}
+
 	win.Println(i,
-		vaxis.Segment{Text: padRight(script.Name, " ", 13)},
+		vaxis.Segment{Text: padRight(name, " ", 13)},
 		vaxis.Segment{Text: col, Style: vaxis.Style{Foreground: vaxis.IndexColor(uint8(script.Colour))}},
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
 	)
+}
+
+// wrapText breaks text at the last space that fits in width, or mid word if a word is wider than the line
+func wrapText(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+
+	join := func(chars []vaxis.Character) string {
+		var sb strings.Builder
+		for _, char := range chars {
+			sb.WriteString(char.Grapheme)
+		}
+		return sb.String()
+	}
+
+	chars := vaxis.Characters(text)
+
+	var lines []string
+	for {
+		end, lineWidth := 0, 0
+		for end < len(chars) && lineWidth+chars[end].Width <= width {
+			lineWidth += chars[end].Width
+			end++
+		}
+		if end == len(chars) {
+			return append(lines, join(chars))
+		}
+		for i := end; i > 0; i-- {
+			if chars[i].Grapheme == " " {
+				end = i
+				break
+			}
+		}
+
+		lines = append(lines, join(chars[:max(end, 1)]))
+		chars = chars[max(end, 1):]
+		for len(chars) > 0 && chars[0].Grapheme == " " {
+			chars = chars[1:]
+		}
+	}
 }
 
 // avoiding fmt.Sprintf in a hot loop
