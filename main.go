@@ -374,8 +374,7 @@ func main() {
 			if !ev.stay {
 				return
 			}
-			requestLoad(ev.sc, ev.query)
-			for _, scriptName := range triggersScript[ev.sc.Name] {
+			for _, scriptName := range selectedScripts {
 				requestLoad(scripts[scriptName], ev.query)
 			}
 		case eventInterval:

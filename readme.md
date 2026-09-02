@@ -21,7 +21,7 @@ I had a bunch of dmenu scripts with a keybinding for each one, and I could never
 A script is more than a one-shot pipe:
 
 - It can be re-run while the menu is open, so the lines stay live.
-- It can be triggered by another - selecting a device in the audio menu reloads the bluetooth menu.
+- It can be shown alongside another - the audio menu brings the bluetooth menu with it.
 - It gets the selected line back as `$1`, instead of you parsing dmenu's stdout.
 
 ---
@@ -85,7 +85,7 @@ Config lives in `$XDG_CONFIG_HOME/cmenu/config.toml`, and is a list of scripts.
 | `path`      | Path to the script, looked up in `$PATH` if not absolute               |
 | `colour`    | Terminal colour (0-15) for the script's lines                          |
 | `wrap`      | Wrap long lines over multiple rows instead of truncating them          |
-| `stay_open` | Keep cmenu open after running a selection, and reload the script       |
+| `stay_open` | Keep cmenu open after running a selection, and reload what's shown     |
 | `preview`   | Run the script in preview mode for the selected line                   |
 | `debounce`  | How long to wait for typing to settle before reloading, e.g. `"300ms"` |
 
@@ -95,8 +95,10 @@ Config lives in `$XDG_CONFIG_HOME/cmenu/config.toml`, and is a list of scripts.
 | ---------------- | --------------------------------------------------------- |
 | `on-start`       | Show when cmenu opens with no prefix typed                |
 | `pre <prefix>`   | Show when the input starts with `<prefix>`, e.g. `pre b`  |
-| `script <name>`  | Show and reload when script `<name>` runs a selection     |
+| `script <name>`  | Show alongside script `<name>`                            |
 | `interval <dur>` | Reload every `<dur>` while visible, e.g. `interval 750ms` |
+
+Running a selection reloads every visible script, if the menu stays open with `stay_open`.
 
 #### Keys
 
