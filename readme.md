@@ -170,14 +170,16 @@ Lines are plain text, tab-separated if you want columns, which cmenu pads so the
 
 #### Payloads
 
-Lines often carry an ID or a command you don't want shown. Print `cmenu data` where the visible part ends. The rest of the line is hidden from the list, from filtering, and from column widths. It brings its own tab, so don't add one:
+Lines often carry an ID or a command you don't want shown. Print `cmenu data` where the visible part ends. The rest of the line is hidden from the list, from filtering, and from column widths:
 
 ```bash
 data="$(cmenu data)"
 
 rbw list --fields folder --fields name --fields user --fields id \
-    | awk -F'\t' -v d="$data" '{ printf "%s\t%s\t%s%s%s\n", $1, $2, $3, d, $4 }'
+    | awk -F'\t' -v d="$data" '{ printf "%s\t%s\t%s\t%s%s\n", $1, $2, $3, d, $4 }'
 ```
+
+A tab right before the marker separates the payload without drawing a column of its own.
 
 Hoist it into a variable like that rather than calling it per line. Your script gets the whole line back in `$1`, so hidden fields are read like any other:
 

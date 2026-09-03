@@ -52,12 +52,8 @@ func main() {
 
 	if len(os.Args) > 1 {
 		switch cmd := os.Args[1]; cmd {
-		case markerHighlight, markerStay, markerLabel:
+		case markerHighlight, markerStay, markerLabel, markerData:
 			fmt.Print(oscPrefix + cmd + oscTerm)
-			return
-		case markerData:
-			// brings its own tab so scripts don't place one themselves
-			fmt.Print("\t" + oscPrefix + cmd + oscTerm)
 			return
 		case "image":
 			if len(os.Args) != 3 {
@@ -1264,8 +1260,7 @@ func cutOSC(s string) (kind, payload, rest string, ok bool) {
 }
 
 // parseLine returns the line with its markers removed, and the part of it that is shown.
-// The data marker brought its own tab, so that tab separates the payload rather than
-// ending a column of its own
+// A tab before the data marker separates the payload rather than ending a column of its own
 func parseLine(raw string) (text, visible string, style lineStyle) {
 	text, rest, hasData := strings.Cut(raw, oscPrefix+markerData+oscTerm)
 	for {
