@@ -17,7 +17,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -52,8 +54,16 @@ func main() {
 
 	if len(os.Args) > 1 {
 		switch cmd := os.Args[1]; cmd {
-		case markerHighlight, markerStay, markerLabel, markerData:
+		case markerHighlight, markerStay, markerLabel:
 			fmt.Print(oscPrefix + cmd + oscTerm)
+			return
+		case markerSet:
+			pairs, err := setPairs(os.Args[2:])
+			if err != nil {
+				quitErr = err
+				return
+			}
+			fmt.Print(oscPrefix + markerSet + ";" + pairs + oscTerm)
 			return
 		case "image":
 			if len(os.Args) != 3 {
@@ -101,19 +111,10 @@ func main() {
 		return
 	}
 
-	const defaultDebounce = 150 * time.Millisecond
-
 	var scripts = map[string]*script{}
 	var scriptOrder = make([]string, 0, len(conf.Scripts))
 	for _, sconf := range conf.Scripts {
-		sc := &script{scriptConf: sconf, debounce: defaultDebounce}
-		if sconf.Debounce != "" {
-			sc.debounce, err = time.ParseDuration(sconf.Debounce)
-			if err != nil {
-				quitErr = fmt.Errorf("parse %q: parse debounce: %w", sconf.Name, err)
-				return
-			}
-		}
+		sc := &script{scriptConf: sconf, run: sconf, debounce: debounceDur(sconf.Debounce)}
 		scripts[sconf.Name] = sc
 		scriptOrder = append(scriptOrder, sconf.Name)
 	}
@@ -167,19 +168,16 @@ func main() {
 	spinner := newSpinner(vx, 125*time.Millisecond, "▌▀▐▄")
 	previewSpinner := newSpinner(vx, 125*time.Millisecond, "▌▀▐▄")
 
-	const previewDebounce = 150 * time.Millisecond
 	for _, scriptName := range scriptOrder {
 		sc := scripts[scriptName]
 		sc.loads = make(chan loadReq, 1)
-		go worker(ctx, vx, sc.loads, sc.debounce, func(ctx context.Context, req loadReq) error {
+		go worker(ctx, vx, sc.loads, func(ctx context.Context, req loadReq) error {
 			return runLoad(ctx, vx, spinner, sc, req)
 		})
-		if sc.Preview {
-			sc.previews = make(chan previewReq, 1)
-			go worker(ctx, vx, sc.previews, previewDebounce, func(ctx context.Context, req previewReq) error {
-				return runPreview(ctx, vx, previewSpinner, sc, req)
-			})
-		}
+		sc.previews = make(chan previewReq, 1)
+		go worker(ctx, vx, sc.previews, func(ctx context.Context, req previewReq) error {
+			return runPreview(ctx, vx, previewSpinner, sc, req)
+		})
 	}
 
 	for _, scriptName := range triggersOnStart {
@@ -335,7 +333,7 @@ func main() {
 				if !ok || sc.executing {
 					break
 				}
-				stay := ln.style.stay || sc.StayOpen || ev.Modifiers&vaxis.ModShift != 0
+				stay := ln.style.stay || sc.run.StayOpen || ev.Modifiers&vaxis.ModShift != 0
 				sc.executing = true
 				query, line := scriptQuery, ln.text
 				go func() {
@@ -359,7 +357,8 @@ func main() {
 			return
 		case eventLines:
 			if len(ev.lines) > 0 {
-				ev.sc.lines = ev.lines
+				ev.sc.lines, ev.sc.run = ev.lines, ev.conf
+				ev.sc.debounce = debounceDur(ev.conf.Debounce)
 			}
 			ev.sc.lastLoaded = time.Now()
 		case eventPreview:
@@ -451,7 +450,7 @@ func main() {
 
 		var previewSc *script
 		var previewLine string
-		if sc, ln, ok := active(); ok && sc.Preview {
+		if sc, ln, ok := active(); ok && sc.run.Preview {
 			previewSc = sc
 			previewLine = ln.text
 		}
@@ -470,7 +469,7 @@ func main() {
 			text := ln.display
 
 			chunks := []string{text}
-			if sc.Wrap {
+			if sc.run.Wrap {
 				chunks = wrapText(text, listW-linePrefix)
 			}
 			if i == index {
@@ -542,6 +541,7 @@ func quitErrorf(f string, a ...any) error {
 type eventLines struct {
 	sc    *script
 	lines []item
+	conf  scriptConf
 }
 
 type eventPreview struct {
@@ -562,15 +562,32 @@ type config struct {
 	Scripts []scriptConf `toml:"scripts"`
 }
 
+const (
+	defaultDelimiter = "\t"
+	defaultDebounce  = 150 * time.Millisecond
+	previewDebounce  = 150 * time.Millisecond
+)
+
+// Fields with a key tag are what a script can say about itself with `cmenu set`, each
+// time it runs. The rest cmenu needs before it can run anything
 type scriptConf struct {
-	Triggers []string `toml:"triggers"`
-	Name     string   `toml:"name"`
-	Path     string   `toml:"path"`
-	Colour   int      `toml:"colour"`
-	Debounce string   `toml:"debounce"`
-	Wrap     bool     `toml:"wrap"`
-	StayOpen bool     `toml:"stay_open"`
-	Preview  bool     `toml:"preview"`
+	Triggers  []string `toml:"triggers"`
+	Name      string   `toml:"name"`
+	Path      string   `toml:"path"`
+	Debounce  string   `toml:"debounce" key:"debounce"`
+	Colour    int      `toml:"colour" key:"colour"`
+	Wrap      bool     `toml:"wrap" key:"wrap"`
+	StayOpen  bool     `toml:"stay_open" key:"stay_open"`
+	Preview   bool     `toml:"preview" key:"preview"`
+	Hide      string   `toml:"hide" key:"hide"`
+	Delimiter string   `toml:"delimiter" key:"delimiter"`
+}
+
+func debounceDur(spec string) time.Duration {
+	if dur, err := time.ParseDuration(spec); err == nil {
+		return dur
+	}
+	return defaultDebounce
 }
 
 func parseConfig(path string) (config, error) {
@@ -598,22 +615,26 @@ type script struct {
 	sentQuery     string
 	sentQuerySet  bool
 	lines         []item
+	run           scriptConf // config, plus whatever this run's set markers asked for
 	previewResult *preview
 	previewLine   string
 }
 
 type item struct {
 	text    string // the line as the script printed it, markers removed
-	display string // the part before the data marker, padded into columns
+	display string // what the list shows: hidden columns dropped, the rest padded
 	style   lineStyle
 }
 
 // requestLoad debounces only when this is a reload for a changed query, so first
 // loads, Ctrl+r, and post-exec reloads run immediately
 func requestLoad(sc *script, query string) {
-	debounce := sc.sentQuerySet && sc.sentQuery != query
+	var wait time.Duration
+	if sc.sentQuerySet && sc.sentQuery != query {
+		wait = sc.debounce
+	}
 	sc.sentQuery, sc.sentQuerySet = query, true
-	send(sc.loads, loadReq{query: query, debounce: debounce})
+	send(sc.loads, loadReq{query: query, wait: wait})
 }
 
 func send[T any](ch chan T, req T) {
@@ -630,9 +651,9 @@ func send[T any](ch chan T, req T) {
 	}
 }
 
-type request interface{ debounced() bool }
+type request interface{ debounce() time.Duration }
 
-func worker[T request](ctx context.Context, vx *vaxis.Vaxis, reqs chan T, debounce time.Duration, run func(context.Context, T) error) {
+func worker[T request](ctx context.Context, vx *vaxis.Vaxis, reqs chan T, run func(context.Context, T) error) {
 	var req T
 	var have bool
 	for {
@@ -645,8 +666,8 @@ func worker[T request](ctx context.Context, vx *vaxis.Vaxis, reqs chan T, deboun
 		}
 		have = false
 
-		if req.debounced() {
-			timer := time.NewTimer(debounce)
+		if wait := req.debounce(); wait > 0 {
+			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -685,12 +706,12 @@ func worker[T request](ctx context.Context, vx *vaxis.Vaxis, reqs chan T, deboun
 }
 
 type loadReq struct {
-	query    string
-	debounce bool
-	quiet    bool
+	query string
+	wait  time.Duration
+	quiet bool
 }
 
-func (r loadReq) debounced() bool { return r.debounce }
+func (r loadReq) debounce() time.Duration { return r.wait }
 
 func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, req loadReq) error {
 	if !req.quiet {
@@ -698,17 +719,17 @@ func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script,
 		defer spinner.stop()
 	}
 
-	lines, err := loadScript(ctx, sc, req.query)
+	lines, conf, err := loadScript(ctx, sc, req.query)
 	if err != nil {
 		return fmt.Errorf("load script %q: %w", sc.Name, err)
 	}
 	if ctx.Err() == nil {
-		vx.PostEvent(eventLines{sc: sc, lines: lines})
+		vx.PostEvent(eventLines{sc: sc, lines: lines, conf: conf})
 	}
 	return nil
 }
 
-func loadScript(ctx context.Context, sc *script, query string) ([]item, error) {
+func loadScript(ctx context.Context, sc *script, query string) ([]item, scriptConf, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -717,10 +738,10 @@ func loadScript(ctx context.Context, sc *script, query string) ([]item, error) {
 	cmd := makeCmd(ctx, sc, modeList, query, "")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return nil, scriptConf{}, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, scriptConf{}, err
 	}
 
 	var lines []string
@@ -729,17 +750,18 @@ func loadScript(ctx context.Context, sc *script, query string) ([]item, error) {
 		lines = append(lines, bs.Text())
 	}
 	if err := bs.Err(); err != nil {
-		return nil, err
+		return nil, scriptConf{}, err
 	}
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
-			return nil, nil
+			return nil, scriptConf{}, nil
 		}
-		return nil, err
+		return nil, scriptConf{}, err
 	}
 
 	slog.InfoContext(ctx, "loaded script", "script", sc.Name, "num_lines", len(lines), "took_ms", time.Since(start).Milliseconds())
-	return parseItems(lines), nil
+	items, conf := parseItems(lines, sc.scriptConf)
+	return items, conf, nil
 }
 
 type previewReq struct {
@@ -747,7 +769,7 @@ type previewReq struct {
 	cols, rows  int
 }
 
-func (previewReq) debounced() bool { return true }
+func (previewReq) debounce() time.Duration { return previewDebounce }
 
 func runPreview(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, req previewReq) error {
 	spinner.start()
@@ -834,26 +856,63 @@ func makeCmd(ctx context.Context, sc *script, mode, query, line string, extraEnv
 	return cmd
 }
 
-// parseItems hides each line's payload and pads the columns left over so that rows of the
-// same shape line up. Labels are prose rather than table rows, so they take no part
-func parseItems(raw []string) []item {
+// parseItems drops the columns a set marker asked to hide, and pads the ones left over so
+// that rows of the most common shape line up. Settings hold for the lines after them, so a
+// script can change shape partway. Labels are prose rather than table rows, and take no part
+func parseItems(raw []string, conf scriptConf) ([]item, scriptConf) {
 	items := make([]item, 0, len(raw))
 	columns := make([][]string, 0, len(raw))
+
+	hidden, _ := parseColumns(conf.Hide)
+
 	for _, r := range raw {
-		text, visible, style := parseLine(r)
+		var isSet bool
+		for {
+			kind, payload, rest, ok := cutOSC(r)
+			if !ok || kind != markerSet {
+				break
+			}
+			r, isSet = rest, true
+			next, err := applySet(conf, payload)
+			if err != nil {
+				slog.Warn("apply set marker", "err", err)
+				continue
+			}
+			conf = next
+			hidden, _ = parseColumns(conf.Hide)
+		}
+		if isSet && r == "" {
+			continue
+		}
+
+		text, style := parseLine(r)
 		items = append(items, item{text: text, style: style})
-		columns = append(columns, strings.Split(visible, "\t"))
+
+		delim := cmp.Or(conf.Delimiter, defaultDelimiter)
+		var shown []string
+		for c, col := range strings.Split(text, delim) {
+			if !slices.Contains(hidden, c+1) {
+				shown = append(shown, col)
+			}
+		}
+		columns = append(columns, shown)
 	}
 
-	var widths []int
+	var shape int
+	counts := map[int]int{}
 	for i, cols := range columns {
 		if items[i].style.label {
 			continue
 		}
-		if widths == nil {
-			widths = make([]int, len(cols))
+		counts[len(cols)]++
+		if counts[len(cols)] > counts[shape] {
+			shape = len(cols)
 		}
-		if len(cols) != len(widths) {
+	}
+
+	widths := make([]int, shape)
+	for i, cols := range columns {
+		if items[i].style.label || len(cols) != shape {
 			continue
 		}
 		for c, col := range cols {
@@ -876,7 +935,7 @@ func parseItems(raw []string) []item {
 		items[i].display = sb.String()
 	}
 
-	return items
+	return items, conf
 }
 
 func textWidth(text string) int {
@@ -913,7 +972,7 @@ func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle
 
 	win.Println(i,
 		vaxis.Segment{Text: padRight(name, " ", 13)},
-		vaxis.Segment{Text: col, Style: vaxis.Style{Foreground: vaxis.IndexColor(uint8(script.Colour))}},
+		vaxis.Segment{Text: col, Style: vaxis.Style{Foreground: vaxis.IndexColor(uint8(script.run.Colour))}},
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
 	)
@@ -1241,7 +1300,7 @@ const (
 	markerHighlight = "highlight"
 	markerStay      = "stay"
 	markerLabel     = "label"
-	markerData      = "data"
+	markerSet       = "set"
 	markerImageData = "image-data"
 	markerImagePath = "image-path"
 )
@@ -1259,10 +1318,9 @@ func cutOSC(s string) (kind, payload, rest string, ok bool) {
 	return kind, payload, rest, true
 }
 
-// parseLine returns the line with its markers removed, and the part of it that is shown.
-// A tab before the data marker separates the payload rather than ending a column of its own
-func parseLine(raw string) (text, visible string, style lineStyle) {
-	text, rest, hasData := strings.Cut(raw, oscPrefix+markerData+oscTerm)
+// parseLine returns the line with its markers removed, and the style they asked for
+func parseLine(raw string) (text string, style lineStyle) {
+	text = raw
 	for {
 		kind, _, stripped, ok := cutOSC(text)
 		if !ok {
@@ -1278,13 +1336,88 @@ func parseLine(raw string) (text, visible string, style lineStyle) {
 			style.label = true
 		}
 	}
+	return text, style
+}
 
-	visible = text
-	if hasData {
-		visible = strings.TrimSuffix(text, "\t")
+// setPairs reads the key value arguments of the set subcommand into the payload of a
+// marker, checking as it goes that a line of lines can apply them again later
+func setPairs(args []string) (string, error) {
+	if len(args) == 0 || len(args)%2 != 0 {
+		return "", fmt.Errorf("usage: set key value...")
 	}
-	text += rest
-	return text, visible, style
+	var pairs []string
+	for i := 0; i < len(args); i += 2 {
+		if strings.ContainsAny(args[i]+args[i+1], ";=") {
+			return "", fmt.Errorf("set %s: a marker separates its pairs with ; and =", args[i])
+		}
+		pairs = append(pairs, args[i]+"="+args[i+1])
+	}
+	payload := strings.Join(pairs, ";")
+	if _, err := applySet(scriptConf{}, payload); err != nil {
+		return "", err
+	}
+	return payload, nil
+}
+
+// applySet fills in the fields named by a set marker's payload, leaving the rest as they were
+func applySet(conf scriptConf, payload string) (scriptConf, error) {
+	v := reflect.ValueOf(&conf).Elem()
+	for pair := range strings.SplitSeq(payload, ";") {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return conf, fmt.Errorf("set %q: want key=value", pair)
+		}
+		field := v.FieldByNameFunc(func(name string) bool {
+			f, _ := v.Type().FieldByName(name)
+			return key != "" && f.Tag.Get("key") == key
+		})
+		if !field.IsValid() {
+			return conf, fmt.Errorf("set %q: no such key", key)
+		}
+		switch field.Kind() {
+		case reflect.Bool:
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return conf, fmt.Errorf("set %s: %w", key, err)
+			}
+			field.SetBool(b)
+		case reflect.Int:
+			i, err := strconv.Atoi(value)
+			if err != nil {
+				return conf, fmt.Errorf("set %s: %w", key, err)
+			}
+			field.SetInt(int64(i))
+		default:
+			field.SetString(value)
+		}
+	}
+	if conf.Hide != "" {
+		if _, err := parseColumns(conf.Hide); err != nil {
+			return conf, err
+		}
+	}
+	if conf.Debounce != "" {
+		if _, err := time.ParseDuration(conf.Debounce); err != nil {
+			return conf, err
+		}
+	}
+	return conf, nil
+}
+
+// parseColumns reads a comma separated column list, like 2 or 2,5
+func parseColumns(spec string) ([]int, error) {
+	var cols []int
+	for part := range strings.SplitSeq(spec, ",") {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("parse column %q: %w", part, err)
+		}
+		if n < 1 {
+			return nil, fmt.Errorf("column %q is not positive", part)
+		}
+		cols = append(cols, n)
+	}
+	return cols, nil
 }
 
 func clamp[T cmp.Ordered](v, mn, mx T) T {

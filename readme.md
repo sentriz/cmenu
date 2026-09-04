@@ -66,28 +66,20 @@ Config lives in `$XDG_CONFIG_HOME/cmenu/config.toml`, and is a list of scripts.
   triggers = ["on-start", "pre b", "script audio", "interval 750ms"]
   name = "bluetooth"
   path = "menu-bluetooth"
-  colour = 3
-  stay_open = true
-  preview = true
 
 [[scripts]]
   triggers = ["pre pw", "pre pass"]
   name = "pass"
   path = "menu-pass"
-  colour = 12
-  preview = true
 ```
 
-| Key         | Description                                                            |
-| ----------- | ---------------------------------------------------------------------- |
-| `triggers`  | When to show and load this script, see [triggers](#triggers)           |
-| `name`      | Name shown in the gutter, and referenced by `script` triggers          |
-| `path`      | Path to the script, looked up in `$PATH` if not absolute               |
-| `colour`    | Terminal colour (0-15) for the script's lines                          |
-| `wrap`      | Wrap long lines over multiple rows instead of truncating them          |
-| `stay_open` | Keep cmenu open after running a selection, and reload what's shown     |
-| `preview`   | Run the script in preview mode for the selected line                   |
-| `debounce`  | How long to wait for typing to settle before reloading, e.g. `"300ms"` |
+| Key        | Description                                                   |
+| ---------- | ------------------------------------------------------------- |
+| `triggers` | When to show and load this script, see [triggers](#triggers)  |
+| `name`     | Name shown in the gutter, and referenced by `script` triggers |
+| `path`     | Path to the script, looked up in `$PATH` if not absolute      |
+
+Config says when to run a script. Everything else, like its colour or hidden columns, is the script's own business, printed with [`cmenu set`](#settings).
 
 #### Triggers
 
@@ -164,28 +156,47 @@ Lines are plain text, tab-separated if you want columns, which cmenu pads so the
 | `cmenu highlight`    | Mark this line as current, e.g. the connected device |
 | `cmenu label`        | Mark this line as a non-selectable label             |
 | `cmenu stay`         | Keep cmenu open after running this line              |
-| `cmenu data`         | Hide the rest of the line, see [payloads](#payloads) |
 | `cmenu image <path>` | In preview mode, render an image instead of text     |
 | `cmenu image -`      | Same, reading the image from stdin                   |
 
-#### Payloads
+#### Settings
 
-Lines often carry an ID or a command you don't want shown. Print `cmenu data` where the visible part ends. The rest of the line is hidden from the list, from filtering, and from column widths:
-
-```bash
-data="$(cmenu data)"
-
-rbw list --fields folder --fields name --fields user --fields id \
-    | awk -F'\t' -v d="$data" '{ printf "%s\t%s\t%s\t%s%s\n", $1, $2, $3, d, $4 }'
-```
-
-A tab right before the marker separates the payload without drawing a column of its own.
-
-Hoist it into a variable like that rather than calling it per line. Your script gets the whole line back in `$1`, so hidden fields are read like any other:
+A script says how it wants to be shown by printing `cmenu set` before its lines:
 
 ```bash
-IFS=$'\t' read -r _ _ _ id <<<"$1"
+cmenu set \
+    colour 1 \
+    preview true \
+    hide 1
+
+rbw list --fields id --fields folder --fields name --fields user
 ```
+
+| Key         | Description                                            |
+| ----------- | ------------------------------------------------------ |
+| `colour`    | Terminal colour index for this script's rows           |
+| `preview`   | Run the script again in preview mode for the cursor    |
+| `stay_open` | Keep cmenu open after running a line                   |
+| `wrap`      | Wrap long lines instead of cutting them                |
+| `hide`      | Columns to keep out of the list, like `1` or `2,5`     |
+| `delimiter` | What separates columns, tab by default                 |
+| `debounce`  | How long to let typing settle before reloading, e.g. `300ms` |
+
+`hide` and `delimiter` act on the lines after them, the rest on the whole run, last one wins. Print `cmenu set` after any preview or run mode branch so it only reaches the list.
+
+Hidden columns never reach the list or the filter, but stay in the line handed back to your script:
+
+```bash
+IFS=$'\t' read -r id _ <<<"$1"
+```
+
+Tab is IFS whitespace, so `read` skips empty columns. Keep the columns you read ahead of any that can be empty. Column 1 is the safe spot, and it can pack several values with a separator of your own:
+
+```bash
+IFS=: read -r con_id port tab <<<"$id"
+```
+
+Free text that might hold tabs of its own wants them squashed, with something like `gsub(/\t/, " ")`, or it draws as columns.
 
 ---
 
@@ -245,7 +256,7 @@ result="$(awk "BEGIN { print $CMENU_INPUT }" 2>/dev/null)"
 echo "$result"
 ```
 
-With `debounce = "300ms"` so it isn't run on every keystroke.
+With `cmenu set debounce 300ms` so it isn't run on every keystroke.
 
 </details>
 
@@ -274,6 +285,6 @@ It's similar, but there are no extensions or integrations - cmenu only renders l
 <details>
 <summary>How do I hide the ID column I use for lookups?</summary>
 
-Put it after `cmenu data`, see [payloads](#payloads). Your script still gets the full line back in `$1`.
+Print `cmenu set hide` with its column, see [settings](#settings). Your script still gets the full line back in `$1`.
 
 </details>
