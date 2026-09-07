@@ -41,15 +41,14 @@ func main() {
 
 	var quitErr error
 	defer func() {
-		if quitErr != nil {
-			slog.Error("quit due to error", "error", quitErr.Error())
+		if quitErr == nil {
+			return
 		}
+		slog.Error("quit due to error", "error", quitErr.Error())
 		if buf, ok := slogWriter.(*bytes.Buffer); ok {
 			io.Copy(os.Stderr, buf)
 		}
-		if quitErr != nil {
-			os.Exit(1)
-		}
+		os.Exit(1)
 	}()
 
 	if len(os.Args) > 1 {
