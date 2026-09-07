@@ -229,7 +229,7 @@ func main() {
 	type row struct {
 		line int
 		text string
-		cont bool
+		gap  bool
 	}
 	var visRows []row
 
@@ -274,7 +274,7 @@ func main() {
 		win.Clear()
 
 		width, height := win.Size()
-		rows := height - 2
+		rows := max(height-4, 0)
 
 		inputKey, keyDown := ev.(vaxis.Key)
 		keyDown = keyDown && inputKey.EventType != vaxis.EventRelease
@@ -459,7 +459,7 @@ func main() {
 		var prevWin vaxis.Window
 		if previewSc != nil {
 			listW = width / 2
-			prevWin = win.New(listW+1, 1, width-listW-1, height-2)
+			prevWin = win.New(listW+1, 2, width-listW-1, rows)
 		}
 
 		visRows = visRows[:0]
@@ -468,6 +468,10 @@ func main() {
 			sc := scripts[ln.script]
 			text := ln.display
 
+			if i > 0 && visLines[i-1].script != ln.script {
+				visRows = append(visRows, row{gap: true})
+			}
+
 			chunks := []string{text}
 			if sc.run.Wrap {
 				chunks = wrapText(text, listW-linePrefix)
@@ -475,8 +479,8 @@ func main() {
 			if i == index {
 				firstRow, lastRow = len(visRows), len(visRows)+len(chunks)-1
 			}
-			for j, chunk := range chunks {
-				visRows = append(visRows, row{line: i, text: chunk, cont: j > 0})
+			for _, chunk := range chunks {
+				visRows = append(visRows, row{line: i, text: chunk})
 			}
 		}
 
@@ -501,19 +505,30 @@ func main() {
 		spinWin := win.New(0, 0, 1, 1)
 		spinner.draw(spinWin)
 
-		listWin := win.New(0, 1, listW, rows)
+		listWin := win.New(0, 2, listW, rows)
 		for i := scroll; i < len(visRows) && i-scroll < rows; i++ {
 			r := visRows[i]
+			if r.gap {
+				continue
+			}
 			it := visLines[r.line]
-			drawLine(listWin, i-scroll, scripts[it.script], r.text, it.style, r.line == index && !it.style.label, r.cont)
+			drawLine(listWin, i-scroll, scripts[it.script], r.text, it.style, r.line == index && !it.style.label)
 		}
 
 		if previewSc != nil {
-			div := win.New(listW, 1, 1, height-2)
-			div.Fill(vaxis.Cell{Character: vaxis.Character{Grapheme: "│", Width: 1}, Style: vaxis.Style{Attribute: vaxis.AttrDim}})
-
 			pv := previewSc.previewResult
 			ready := previewSc.previewLine == previewLine
+
+			var divHeight int
+			if pv != nil && ready {
+				divHeight = rows
+				if pv.img == nil {
+					divHeight = clamp(strings.Count(strings.TrimRight(pv.text, "\n"), "\n")+1, 0, rows)
+				}
+			}
+
+			div := win.New(listW, 2, 1, divHeight)
+			div.Fill(vaxis.Cell{Character: vaxis.Character{Grapheme: "│", Width: 1}, Style: vaxis.Style{Attribute: vaxis.AttrDim}})
 
 			if pv != nil && ready {
 				imgState.draw(prevWin, vx, pv)
@@ -526,7 +541,11 @@ func main() {
 		}
 
 		footerWin := win.New(0, height-1, width, 1)
-		drawFooter(footerWin, conf, visScripts)
+		var activeName string
+		if sc, _, ok := active(); ok {
+			activeName = sc.Name
+		}
+		drawFooter(footerWin, conf, visScripts, activeName)
 
 		vx.Render()
 	}
@@ -946,9 +965,9 @@ func textWidth(text string) int {
 	return width
 }
 
-const linePrefix = 15
+const linePrefix = 2
 
-func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected, cont bool) {
+func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected bool) {
 	var col string = "▌"
 	if ls.highlight {
 		col = "█"
@@ -965,13 +984,7 @@ func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle
 		style.Attribute |= vaxis.AttrDim
 	}
 
-	name := script.Name
-	if cont {
-		name = ""
-	}
-
 	win.Println(i,
-		vaxis.Segment{Text: padRight(name, " ", 13)},
 		vaxis.Segment{Text: col, Style: vaxis.Style{Foreground: vaxis.IndexColor(uint8(script.run.Colour))}},
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
@@ -1017,15 +1030,6 @@ func wrapText(text string, width int) []string {
 			chars = chars[1:]
 		}
 	}
-}
-
-// avoiding fmt.Sprintf in a hot loop
-func padRight(s string, p string, width int) string {
-	gap := width - len(s)
-	if gap <= 0 {
-		return s
-	}
-	return s + strings.Repeat(p, gap)
 }
 
 // imageState double-buffers preview images so swaps never blank: the old image
@@ -1094,7 +1098,7 @@ func styledSegments(vx *vaxis.Vaxis, s string) []vaxis.Segment {
 	return segs
 }
 
-func drawFooter(win vaxis.Window, conf config, visScripts []string) {
+func drawFooter(win vaxis.Window, conf config, visScripts []string, activeName string) {
 	footSegs := make([]vaxis.Segment, 0, len(conf.Scripts)*2)
 	footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Attribute: vaxis.AttrDim}})
 
@@ -1106,15 +1110,22 @@ func drawFooter(win vaxis.Window, conf config, visScripts []string) {
 		if slices.Contains(visScripts, sconf.Name) {
 			style = vaxis.Style{UnderlineStyle: vaxis.UnderlineSingle}
 		}
+		if sconf.Name == activeName {
+			style.Attribute |= vaxis.AttrBold
+		}
 		footSegs = append(footSegs, vaxis.Segment{Text: sconf.Name, Style: style})
 	}
 
 	win.Println(0, footSegs...)
 }
 
+// spinners only appear once work has run for spinnerDelay, so quick scripts don't flash one
+const spinnerDelay = 150 * time.Millisecond
+
 type spinner struct {
-	model *vxspinner.Model
-	count atomic.Int32
+	model   *vxspinner.Model
+	count   atomic.Int32
+	started atomic.Int64
 }
 
 func newSpinner(vx *vaxis.Vaxis, duration time.Duration, frames string) *spinner {
@@ -1127,6 +1138,7 @@ func newSpinner(vx *vaxis.Vaxis, duration time.Duration, frames string) *spinner
 
 func (s *spinner) start() {
 	if s.count.Add(1) == 1 {
+		s.started.Store(time.Now().UnixNano())
 		s.model.Start()
 	}
 }
@@ -1138,6 +1150,9 @@ func (s *spinner) stop() {
 }
 
 func (s *spinner) draw(w vaxis.Window) {
+	if s.count.Load() == 0 || time.Since(time.Unix(0, s.started.Load())) < spinnerDelay {
+		return
+	}
 	s.model.Draw(w)
 }
 
