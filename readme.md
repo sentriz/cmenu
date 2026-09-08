@@ -149,7 +149,7 @@ A script doesn't need a prefix. If the input starts with `#`, the next word is a
 
 #### Markers
 
-Lines are plain text, tab-separated if you want columns, which cmenu pads so they line up. A few markers are available as subcommands, printed as part of a line:
+Lines are plain text, tab-separated if you want columns, which cmenu pads so they line up, even across lines with different column counts. The last column is never padded, so long free text belongs there. A few markers are available as subcommands, printed as part of a line:
 
 | Command              | Description                                          |
 | -------------------- | ---------------------------------------------------- |

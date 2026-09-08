@@ -874,9 +874,10 @@ func makeCmd(ctx context.Context, sc *script, mode, query, line string, extraEnv
 	return cmd
 }
 
-// parseItems drops the columns a set marker asked to hide, and pads the ones left over so
-// that rows of the most common shape line up. Settings hold for the lines after them, so a
-// script can change shape partway. Labels are prose rather than table rows, and take no part
+// parseItems drops the columns a set marker asked to hide, and pads the ones left over so that
+// rows line up, however many columns each one has. A row's last column is whatever is left of
+// it, so it neither pads nor sets a width - long free text belongs there. Settings hold for the
+// lines after them, so a script can change shape partway
 func parseItems(raw []string, conf scriptConf) ([]item, scriptConf) {
 	items := make([]item, 0, len(raw))
 	columns := make([][]string, 0, len(raw))
@@ -916,37 +917,26 @@ func parseItems(raw []string, conf scriptConf) ([]item, scriptConf) {
 		columns = append(columns, shown)
 	}
 
-	var shape int
-	counts := map[int]int{}
-	for i, cols := range columns {
-		if items[i].style.label {
-			continue
-		}
-		counts[len(cols)]++
-		if counts[len(cols)] > counts[shape] {
-			shape = len(cols)
-		}
+	var grid int
+	for _, cols := range columns {
+		grid = max(grid, len(cols)-1)
 	}
 
-	widths := make([]int, shape)
-	for i, cols := range columns {
-		if items[i].style.label || len(cols) != shape {
-			continue
-		}
-		for c, col := range cols {
+	widths := make([]int, max(0, grid))
+	for _, cols := range columns {
+		for c, col := range cols[:max(0, len(cols)-1)] {
 			widths[c] = max(widths[c], textWidth(col))
 		}
 	}
 
 	for i, cols := range columns {
-		pad := !items[i].style.label && len(cols) == len(widths)
 		var sb strings.Builder
 		for c, col := range cols {
 			if c > 0 {
 				sb.WriteString(" ")
 			}
 			sb.WriteString(col)
-			if pad && c < len(cols)-1 {
+			if c < len(cols)-1 {
 				sb.WriteString(strings.Repeat(" ", widths[c]-textWidth(col)))
 			}
 		}
