@@ -422,10 +422,12 @@ func main() {
 
 				var scriptVisible bool
 				for _, it := range script.lines {
-					if filterQuery == "" || matches(it.display, filterQuery, fuzz) {
-						visLines = append(visLines, line{script: scriptName, item: it})
-						scriptVisible = true
+					// a query is looking for something to run, and labels are never that
+					if filterQuery != "" && (it.style.label || !matches(it.display, filterQuery, fuzz)) {
+						continue
 					}
+					visLines = append(visLines, line{script: scriptName, item: it})
+					scriptVisible = true
 				}
 				if scriptVisible {
 					visScripts = append(visScripts, scriptName)
@@ -957,9 +959,12 @@ func textWidth(text string) int {
 const linePrefix = 2
 
 func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected bool) {
-	var col string = "▌"
-	if ls.highlight {
+	col := "▌"
+	switch {
+	case ls.highlight:
 		col = "█"
+	case ls.label:
+		col = " "
 	}
 
 	var style vaxis.Style
