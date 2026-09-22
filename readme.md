@@ -53,6 +53,8 @@ windowrule = size 1000 600, class:cmenu
 
 Other terminals use a different flag for the same thing - `kitty --class cmenu`, `alacritty --class cmenu`, `wezterm start --class cmenu`. On X11 window managers, match on the class instead of the app ID.
 
+`cmenu open <input>` starts with the input already typed, so a second binding can go straight to a script, or past it to a script's own input - `cmenu open '#sway'`, `cmenu open 'c [1+34]'`.
+
 It also runs nice in a normal terminal or a tmux pane, which is handy while writing a script.
 
 ---

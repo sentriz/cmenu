@@ -51,10 +51,11 @@ func main() {
 		os.Exit(1)
 	}()
 
-	var file string
+	var startInput, file string
 	var setArgs []string
 	switch args := os.Args[1:]; {
 	case match(args):
+	case match(args, "open", &startInput):
 	case match(args, markerHighlight), match(args, markerStay), match(args, markerLabel):
 		fmt.Print(oscPrefix + args[0] + oscTerm)
 		return
@@ -77,7 +78,7 @@ func main() {
 		fmt.Print(oscPrefix + markerImagePath + ";" + file + oscTerm)
 		return
 	default:
-		quitErr = fmt.Errorf("usage: cmenu [highlight | stay | label | set <key> <value>... | image <path>]")
+		quitErr = fmt.Errorf("usage: cmenu [open <input> | highlight | stay | label | set <key> <value>... | image <path>]")
 		return
 	}
 
@@ -173,10 +174,6 @@ func main() {
 		})
 	}
 
-	for _, scriptName := range triggersOnStart {
-		requestLoad(scripts[scriptName], "")
-	}
-
 	for scriptName, inter := range triggersInterval {
 		sc := scripts[scriptName]
 		go func() {
@@ -196,7 +193,8 @@ func main() {
 
 	input := textinput.
 		New().
-		SetPrompt("> ")
+		SetPrompt("> ").
+		SetContent(startInput)
 	input.Prompt = vaxis.Style{Attribute: vaxis.AttrDim}
 
 	type previewKey struct {
