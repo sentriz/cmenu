@@ -51,40 +51,34 @@ func main() {
 		os.Exit(1)
 	}()
 
-	if len(os.Args) > 1 {
-		switch cmd := os.Args[1]; cmd {
-		case markerHighlight, markerStay, markerLabel:
-			fmt.Print(oscPrefix + cmd + oscTerm)
-			return
-		case markerSet:
-			pairs, err := setPairs(os.Args[2:])
-			if err != nil {
-				quitErr = err
-				return
-			}
-			fmt.Print(oscPrefix + markerSet + ";" + pairs + oscTerm)
-			return
-		case "image":
-			if len(os.Args) != 3 {
-				quitErr = fmt.Errorf("image needs argument")
-				return
-			}
-			switch file := os.Args[2]; file {
-			case "-":
-				fmt.Print(oscPrefix + markerImageData + ";")
-				enc := base64.NewEncoder(base64.StdEncoding, os.Stdout)
-				io.Copy(enc, os.Stdin)
-				enc.Close()
-				fmt.Print(oscTerm)
-				return
-			default:
-				fmt.Print(oscPrefix + markerImagePath + ";" + file + oscTerm)
-				return
-			}
-		default:
-			quitErr = fmt.Errorf("unknown command %q", cmd)
+	var file string
+	var setArgs []string
+	switch args := os.Args[1:]; {
+	case match(args):
+	case match(args, markerHighlight), match(args, markerStay), match(args, markerLabel):
+		fmt.Print(oscPrefix + args[0] + oscTerm)
+		return
+	case match(args, markerSet, &setArgs):
+		pairs, err := setPairs(setArgs)
+		if err != nil {
+			quitErr = err
 			return
 		}
+		fmt.Print(oscPrefix + markerSet + ";" + pairs + oscTerm)
+		return
+	case match(args, "image", "-"):
+		fmt.Print(oscPrefix + markerImageData + ";")
+		enc := base64.NewEncoder(base64.StdEncoding, os.Stdout)
+		io.Copy(enc, os.Stdin)
+		enc.Close()
+		fmt.Print(oscTerm)
+		return
+	case match(args, "image", &file):
+		fmt.Print(oscPrefix + markerImagePath + ";" + file + oscTerm)
+		return
+	default:
+		quitErr = fmt.Errorf("usage: cmenu [highlight | stay | label | set <key> <value>... | image <path>]")
+		return
 	}
 
 	if logPath := os.Getenv("CMENU_LOG_PATH"); logPath != "" {
@@ -1376,6 +1370,28 @@ func parseLine(raw string) (text string, style lineStyle) {
 		}
 	}
 	return text, style
+}
+
+// match reports whether args fit the pattern, where a string is matched literally, a
+// *string captures one argument, and a *[]string captures the rest
+func match(args []string, pattern ...any) bool {
+	for i, p := range pattern {
+		switch p := p.(type) {
+		case string:
+			if i >= len(args) || args[i] != p {
+				return false
+			}
+		case *string:
+			if i >= len(args) {
+				return false
+			}
+			*p = args[i]
+		case *[]string:
+			*p = args[i:]
+			return true
+		}
+	}
+	return len(args) == len(pattern)
 }
 
 // setPairs reads the key value arguments of the set subcommand into the payload of a
