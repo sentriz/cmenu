@@ -231,6 +231,7 @@ func main() {
 		gap  bool
 	}
 	var visRows []row
+	var listW int
 
 	active := func() (*script, line, bool) {
 		if index < 0 || index >= len(visLines) || visLines[index].style.label {
@@ -285,6 +286,29 @@ func main() {
 		}
 		selectName, selected, scriptQuery, filterQuery := parseInput(input.String())
 
+		execute := func(stay bool) {
+			sc, ln, ok := active()
+			if !ok || sc.executing {
+				return
+			}
+			stay = stay || ln.style.stay || sc.run.StayOpen
+			sc.executing = true
+			query, line := scriptQuery, ln.text
+			go func() {
+				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+
+				spinner.start()
+				err := makeCmd(ctx, sc, modeRun, query, line).Run()
+				spinner.stop()
+				if err != nil {
+					vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
+					return
+				}
+				vx.PostEvent(eventExecDone{sc: sc, query: query, stay: stay})
+			}()
+		}
+
 		switch ev := ev.(type) {
 		case vaxis.Key:
 			if ev.EventType == vaxis.EventRelease {
@@ -328,26 +352,32 @@ func main() {
 				}
 				requestLoad(sc, scriptQuery)
 			case "Enter", "Shift+Enter":
-				sc, ln, ok := active()
-				if !ok || sc.executing {
+				execute(ev.Modifiers&vaxis.ModShift != 0)
+			}
+		case vaxis.Mouse:
+			switch ev.Button {
+			case vaxis.MouseWheelUp:
+				for range 3 {
+					index = step(visLines, index, -1)
+				}
+			case vaxis.MouseWheelDown:
+				for range 3 {
+					index = step(visLines, index, +1)
+				}
+			case vaxis.MouseLeftButton:
+				if ev.EventType != vaxis.EventPress {
 					break
 				}
-				stay := ln.style.stay || sc.run.StayOpen || ev.Modifiers&vaxis.ModShift != 0
-				sc.executing = true
-				query, line := scriptQuery, ln.text
-				go func() {
-					ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-					defer cancel()
-
-					spinner.start()
-					err := makeCmd(ctx, sc, modeRun, query, line).Run()
-					spinner.stop()
-					if err != nil {
-						vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
-						return
+				i := ev.Row - 2 + scroll
+				if ev.Col >= listW || i < 0 || i >= len(visRows) || visRows[i].gap {
+					break
+				}
+				if ln := visRows[i].line; !visLines[ln].style.label {
+					if ln == index {
+						execute(ev.Modifiers&vaxis.ModShift != 0)
 					}
-					vx.PostEvent(eventExecDone{sc: sc, query: query, stay: stay})
-				}()
+					index = ln
+				}
 			}
 		case vaxis.QuitEvent:
 			return
@@ -456,7 +486,7 @@ func main() {
 			previewLine = ln.text
 		}
 
-		listW := width
+		listW = width
 		var prevWin vaxis.Window
 		if previewSc != nil {
 			listW = width / 2

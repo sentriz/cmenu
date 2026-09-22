@@ -103,6 +103,8 @@ Running a selection reloads every visible script, if the menu stays open with `s
 | <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd>               | Jump between scripts        |
 | <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd>            | Cycle which script is shown |
 | <kbd>Escape</kbd> / <kbd>Ctrl+c</kbd> / <kbd>Ctrl+d</kbd> | Quit                        |
+| Wheel up / down                                           | Move                        |
+| Click                                                     | Select, click again to run  |
 
 ---
 
