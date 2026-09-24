@@ -208,6 +208,7 @@ func main() {
 	var index int
 	var scroll int
 	var selectedScripts []string
+	var pickedScripts = map[string]struct{}{}
 
 	type line struct {
 		script string
@@ -278,6 +279,13 @@ func main() {
 		}
 		selectName, selected, scriptQuery, filterQuery := parseInput(input.String())
 
+		queryFor := func(scriptName string) string {
+			if _, ok := pickedScripts[scriptName]; ok {
+				return scriptQuery
+			}
+			return ""
+		}
+
 		execute := func(stay bool) {
 			sc, ln, ok := active()
 			if !ok || sc.executing {
@@ -285,7 +293,7 @@ func main() {
 			}
 			stay = stay || ln.style.stay || sc.run.StayOpen
 			sc.executing = true
-			query, line := scriptQuery, ln.text
+			query, line := queryFor(sc.Name), ln.text
 			go func() {
 				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 				defer cancel()
@@ -297,7 +305,7 @@ func main() {
 					vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
 					return
 				}
-				vx.PostEvent(eventExecDone{sc: sc, query: query, stay: stay})
+				vx.PostEvent(eventExecDone{sc: sc, stay: stay})
 			}()
 		}
 
@@ -342,7 +350,7 @@ func main() {
 				if !ok {
 					break
 				}
-				requestLoad(sc, scriptQuery)
+				requestLoad(sc, queryFor(sc.Name))
 			case "Enter", "Shift+Enter":
 				execute(ev.Modifiers&vaxis.ModShift != 0)
 			}
@@ -391,7 +399,7 @@ func main() {
 				return
 			}
 			for _, scriptName := range selectedScripts {
-				requestLoad(scripts[scriptName], ev.query)
+				requestLoad(scripts[scriptName], queryFor(scriptName))
 			}
 		case eventInterval:
 			if !ev.sc.lastLoaded.IsZero() {
@@ -404,11 +412,13 @@ func main() {
 		}
 
 		selectedScripts = selectedScripts[:0]
+		clear(pickedScripts)
 
-		// selectScripts adds scripts plus everything they trigger
-		selectScripts := func(scriptNames ...string) {
+		// pickScripts adds scripts plus everything they trigger
+		pickScripts := func(scriptNames ...string) {
 			selectedScripts = append(selectedScripts, scriptNames...)
 			for _, scriptName := range scriptNames {
+				pickedScripts[scriptName] = struct{}{}
 				selectedScripts = append(selectedScripts, triggersScript[scriptName]...)
 			}
 		}
@@ -417,11 +427,11 @@ func main() {
 		switch scriptNames := triggersPrefix[left]; {
 		case selected:
 			if scripts[selectName] != nil {
-				selectScripts(selectName)
+				pickScripts(selectName)
 			}
 		case len(scriptNames) > 0:
 			filterQuery = after
-			selectScripts(scriptNames...)
+			pickScripts(scriptNames...)
 		default:
 			selectedScripts = append(selectedScripts, triggersOnStart...)
 		}
@@ -429,10 +439,11 @@ func main() {
 		// invoke scripts that haven't been asked for this query yet, the worker debounces reloads
 		for _, scriptName := range selectedScripts {
 			script := scripts[scriptName]
-			if script.sentQuerySet && script.sentQuery == scriptQuery {
+			query := queryFor(scriptName)
+			if script.sentQuerySet && script.sentQuery == query {
 				continue
 			}
-			requestLoad(script, scriptQuery)
+			requestLoad(script, query)
 		}
 
 		for fuzz := range 3 {
@@ -518,7 +529,7 @@ func main() {
 			lastPreviewKey = key
 			if previewSc != nil {
 				cols, rows := prevWin.Size()
-				send(previewSc.previews, previewReq{query: scriptQuery, line: previewLine, cols: cols, rows: rows})
+				send(previewSc.previews, previewReq{query: queryFor(previewSc.Name), line: previewLine, cols: cols, rows: rows})
 			}
 		}
 
@@ -593,9 +604,8 @@ type eventPreview struct {
 }
 
 type eventExecDone struct {
-	sc    *script
-	query string
-	stay  bool
+	sc   *script
+	stay bool
 }
 
 type eventInterval struct{ sc *script }

@@ -142,6 +142,8 @@ But some scripts can't print anything until you've told them what you want - a c
 
 Text outside the brackets filters the lines cmenu already has. Text inside them runs the script again, so give bracket scripts a `debounce` to keep that off every keystroke.
 
+Only scripts picked by prefix or [name](#picking-a-script-by-name) get the input. `on-start` scripts, and scripts shown alongside with `script <name>`, run without it.
+
 #### Picking a script by name
 
 A script doesn't need a prefix. If the input starts with `#`, the next word is a script `name`, and only that script is shown:
