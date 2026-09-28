@@ -402,7 +402,7 @@ func main() {
 				requestLoad(scripts[scriptName], queryFor(scriptName))
 			}
 		case eventInterval:
-			if !ev.sc.lastLoaded.IsZero() {
+			if !ev.sc.lastLoaded.IsZero() && slices.Contains(selectedScripts, ev.sc.Name) {
 				send(ev.sc.loads, loadReq{query: ev.sc.sentQuery, quiet: true})
 			}
 		case vaxis.SyncFunc:
