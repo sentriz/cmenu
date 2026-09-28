@@ -8,7 +8,7 @@ I had a bunch of dmenu scripts with a keybinding for each one, and I could never
 
 - A menu is just an executable script which prints lines.
 - cmenu runs the scripts, they don't run cmenu.
-- One keybinding for all of them - scripts are picked by prefix, `b` for bluetooth, or `on-start` for none at all. Or by name with `#<name>`, or by cycling with <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd>.
+- One keybinding for all of them - scripts are picked by prefix, `b ` for bluetooth, or `on-start` for none at all. Or by name with `#<name>`, or by cycling with <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd>.
 - Several scripts can be shown at once, in one list, each with its own colour.
 - Because cmenu runs them, scripts can be re-run - on an interval, after a selection, or with <kbd>Ctrl+r</kbd>. One script can even trigger another.
 - Optional preview pane, filled by the same script - called again with the selected line, printing text or an image.
@@ -88,7 +88,7 @@ Config says when to run a script. Everything else, like its colour or hidden col
 | Trigger          | Description                                               |
 | ---------------- | --------------------------------------------------------- |
 | `on-start`       | Show when cmenu opens with no prefix typed                |
-| `pre <prefix>`   | Show when the input starts with `<prefix>`, e.g. `pre b`  |
+| `pre <prefix>`   | Show when the input starts with `<prefix> `, e.g. `pre b` |
 | `script <name>`  | Show alongside script `<name>`                            |
 | `interval <dur>` | Reload every `<dur>` while visible, e.g. `interval 750ms` |
 

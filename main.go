@@ -327,7 +327,7 @@ func main() {
 					dir = -1
 				}
 				cur := selectName
-				if left, _, _ := strings.Cut(filterQuery, " "); len(triggersPrefix[left]) > 0 {
+				if left, _, ok := strings.Cut(filterQuery, " "); ok && len(triggersPrefix[left]) > 0 {
 					cur = triggersPrefix[left][0]
 				}
 				input.SetContent(selectPrefix + cycleScript(scriptOrder, cur, dir) + " ")
@@ -411,7 +411,8 @@ func main() {
 			imgState.settle()
 		}
 
-		selectedScripts = selectedScripts[:0]
+		lastSelected := selectedScripts
+		selectedScripts = nil
 		clear(pickedScripts)
 
 		// pickScripts adds scripts plus everything they trigger
@@ -423,17 +424,23 @@ func main() {
 			}
 		}
 
-		left, after, _ := strings.Cut(filterQuery, " ")
+		left, after, hasPrefix := strings.Cut(filterQuery, " ")
 		switch scriptNames := triggersPrefix[left]; {
 		case selected:
 			if scripts[selectName] != nil {
 				pickScripts(selectName)
 			}
-		case len(scriptNames) > 0:
+		case hasPrefix && len(scriptNames) > 0:
 			filterQuery = after
 			pickScripts(scriptNames...)
 		default:
 			selectedScripts = append(selectedScripts, triggersOnStart...)
+		}
+
+		for _, scriptName := range lastSelected {
+			if !slices.Contains(selectedScripts, scriptName) {
+				cancelLoad(scripts[scriptName])
+			}
 		}
 
 		// invoke scripts that haven't been asked for this query yet, the worker debounces reloads
@@ -448,7 +455,7 @@ func main() {
 
 		for fuzz := range 3 {
 			visLines = visLines[:0]
-			visScripts = visScripts[:0]
+			visScripts = nil
 
 			for _, scriptName := range selectedScripts {
 				script := scripts[scriptName]
@@ -689,6 +696,12 @@ func requestLoad(sc *script, query string) {
 	send(sc.loads, loadReq{query: query, wait: wait})
 }
 
+// cancelLoad stops any load in flight, and forgets the query so the script loads again once reselected
+func cancelLoad(sc *script) {
+	sc.sentQuerySet = false
+	send(sc.loads, loadReq{cancel: true})
+}
+
 func send[T any](ch chan T, req T) {
 	for {
 		select {
@@ -758,14 +771,18 @@ func worker[T request](ctx context.Context, vx *vaxis.Vaxis, reqs chan T, run fu
 }
 
 type loadReq struct {
-	query string
-	wait  time.Duration
-	quiet bool
+	query  string
+	wait   time.Duration
+	quiet  bool
+	cancel bool
 }
 
 func (r loadReq) debounce() time.Duration { return r.wait }
 
 func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, req loadReq) error {
+	if req.cancel {
+		return nil
+	}
 	if !req.quiet {
 		spinner.start()
 		defer spinner.stop()
@@ -1189,7 +1206,7 @@ const (
 )
 
 // parseInput splits input like "#calc cc [1+3] 4" into the selected script name "calc",
-// scriptQuery "1+3" and filterQuery "cc 4". a leading selectPrefix always selects by name,
+// scriptQuery "1+3" and filterQuery "cc  4". a leading selectPrefix always selects by name,
 // so "#" alone selects nothing rather than falling back to the on-start scripts
 func parseInput(s string) (selectName string, selected bool, scriptQuery, filterQuery string) {
 	if rest, ok := strings.CutPrefix(s, selectPrefix); ok {
@@ -1206,7 +1223,7 @@ func parseInput(s string) (selectName string, selected bool, scriptQuery, filter
 	}
 	cl += open
 	scriptQuery = s[open+1 : cl]
-	filterQuery = strings.Join(strings.Fields(s[:open]+" "+s[cl+1:]), " ")
+	filterQuery = strings.TrimLeft(s[:open]+" "+s[cl+1:], " ")
 	return selectName, selected, scriptQuery, filterQuery
 }
 
