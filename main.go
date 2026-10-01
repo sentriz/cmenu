@@ -1206,7 +1206,7 @@ const (
 )
 
 // parseInput splits input like "#calc cc [1+3] 4" into the selected script name "calc",
-// scriptQuery "1+3" and filterQuery "cc  4". a leading selectPrefix always selects by name,
+// scriptQuery "1+3" and filterQuery "cc 4". a leading selectPrefix always selects by name,
 // so "#" alone selects nothing rather than falling back to the on-start scripts
 func parseInput(s string) (selectName string, selected bool, scriptQuery, filterQuery string) {
 	if rest, ok := strings.CutPrefix(s, selectPrefix); ok {
@@ -1223,7 +1223,7 @@ func parseInput(s string) (selectName string, selected bool, scriptQuery, filter
 	}
 	cl += open
 	scriptQuery = s[open+1 : cl]
-	filterQuery = strings.TrimLeft(s[:open]+" "+s[cl+1:], " ")
+	filterQuery = strings.TrimLeft(s[:open], " ") + strings.TrimLeft(s[cl+1:], " ")
 	return selectName, selected, scriptQuery, filterQuery
 }
 
