@@ -453,6 +453,8 @@ func main() {
 			requestLoad(script, query)
 		}
 
+		atTop := index <= step(visLines, -1, +1)
+
 		for fuzz := range 3 {
 			visLines = visLines[:0]
 			visScripts = nil
@@ -477,6 +479,10 @@ func main() {
 			if len(visLines) > 0 {
 				break
 			}
+		}
+
+		if atTop {
+			index = 0
 		}
 
 		// keep cursor off labels
