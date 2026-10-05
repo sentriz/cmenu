@@ -52,11 +52,14 @@ func main() {
 		os.Exit(1)
 	}()
 
-	var startQuery, file string
+	var startQuery, nextQuery, file string
 	var setArgs []string
 	switch args := os.Args[1:]; {
 	case match(args):
 	case match(args, "open", &startQuery):
+	case match(args, markerQuery, &nextQuery):
+		fmt.Print(oscPrefix + markerQuery + ";" + nextQuery + oscTerm)
+		return
 	case match(args, markerHighlight), match(args, markerStay), match(args, markerLabel):
 		fmt.Print(oscPrefix + args[0] + oscTerm)
 		return
@@ -79,7 +82,7 @@ func main() {
 		fmt.Print(oscPrefix + markerImagePath + ";" + file + oscTerm)
 		return
 	default:
-		quitErr = fmt.Errorf("usage: cmenu [open <query> | highlight | stay | label | set <key> <value>... | image <path>]")
+		quitErr = fmt.Errorf("usage: cmenu [open <query> | query <query> | highlight | stay | label | set <key> <value>... | image <path>]")
 		return
 	}
 
@@ -210,6 +213,8 @@ func main() {
 	var scroll int
 	var selectedScripts []string
 	var pickedScripts = map[string]struct{}{}
+	var pickedPrefix string
+	var back []string
 
 	type line struct {
 		script string
@@ -295,12 +300,20 @@ func main() {
 			stay = stay || ln.style.stay || sc.run.StayOpen
 			sc.executing = true
 			runInput, line := inputFor(sc.Name), ln.text
+
+			prefix := selectPrefix + sc.Name + " "
+			if _, ok := pickedScripts[sc.Name]; ok {
+				prefix = pickedPrefix
+			}
+			env := []string{"CMENU_QUERY=" + input.String(), "CMENU_PREFIX=" + prefix}
+
 			go func() {
 				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 				defer cancel()
 
-				cmd := makeCmd(ctx, sc, modeRun, runInput, line)
-				cmd.Stdout = io.Discard
+				var out strings.Builder
+				cmd := makeCmd(ctx, sc, modeRun, runInput, line, env...)
+				cmd.Stdout = &out
 
 				spinner.start()
 				err := cmd.Run()
@@ -313,8 +326,18 @@ func main() {
 					vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
 					return
 				}
-				vx.PostEvent(eventExecDone{sc: sc, stay: stay})
+
+				vx.PostEvent(eventExecDone{sc: sc, stay: stay, query: parseRun(out.String())})
 			}()
+		}
+
+		setQuery := func(query string) {
+			input.SetContent(query)
+			selectName, selected, scriptInput, filterQuery = parseQuery(input.String())
+			index, scroll = 0, 0
+			for _, scriptName := range selectedScripts {
+				scripts[scriptName].sentInputSet = false
+			}
 		}
 
 		switch ev := ev.(type) {
@@ -323,7 +346,13 @@ func main() {
 				break
 			}
 			switch ev.String() {
-			case "Escape", "Ctrl+c", "Ctrl+d":
+			case "Escape":
+				if len(back) == 0 {
+					return
+				}
+				setQuery(back[len(back)-1])
+				back = back[:len(back)-1]
+			case "Ctrl+c", "Ctrl+d":
 				return
 			case "Down":
 				index = step(visLines, index, +1)
@@ -338,9 +367,7 @@ func main() {
 				if left, _, ok := strings.Cut(filterQuery, " "); ok && len(triggersPrefix[left]) > 0 {
 					cur = triggersPrefix[left][0]
 				}
-				input.SetContent(selectPrefix + cycleScript(scriptOrder, cur, dir) + " ")
-				selectName, selected, scriptInput, filterQuery = parseQuery(input.String())
-				index, scroll = 0, 0
+				setQuery(selectPrefix + cycleScript(scriptOrder, cur, dir) + " ")
 			case "Shift+Down":
 				index = stepGroup(visLines, index, +1)
 			case "Shift+Up":
@@ -403,6 +430,11 @@ func main() {
 			ev.sc.previewLine = ev.line
 		case eventExecDone:
 			ev.sc.executing = false
+			if ev.query != nil {
+				back = append(back, input.String())
+				setQuery(*ev.query)
+				break
+			}
 			if !ev.stay {
 				return
 			}
@@ -432,15 +464,18 @@ func main() {
 			}
 		}
 
+		pickedPrefix = ""
 		left, after, hasPrefix := strings.Cut(filterQuery, " ")
 		switch scriptNames := triggersPrefix[left]; {
 		case selected:
 			if scripts[selectName] != nil {
 				pickScripts(selectName)
+				pickedPrefix = selectPrefix + selectName + " "
 			}
 		case hasPrefix && len(scriptNames) > 0:
 			filterQuery = after
 			pickScripts(scriptNames...)
+			pickedPrefix = left + " "
 		default:
 			selectedScripts = append(selectedScripts, triggersOnStart...)
 		}
@@ -624,8 +659,9 @@ type eventPreview struct {
 }
 
 type eventExecDone struct {
-	sc   *script
-	stay bool
+	sc    *script
+	stay  bool
+	query *string
 }
 
 type eventInterval struct{ sc *script }
@@ -1371,6 +1407,7 @@ const (
 	markerHighlight = "highlight"
 	markerStay      = "stay"
 	markerLabel     = "label"
+	markerQuery     = "query"
 	markerSet       = "set"
 	markerImageData = "image-data"
 	markerImagePath = "image-path"
@@ -1408,6 +1445,26 @@ func parseLine(raw string) (text string, style lineStyle) {
 		}
 	}
 	return text, style
+}
+
+// parseRun returns the last query a line asked for with cmenu query, if any. Markers can land
+// mid-line, since cmenu query prints no newline
+func parseRun(out string) *string {
+	var query *string
+	for {
+		i := strings.Index(out, oscPrefix)
+		if i < 0 {
+			return query
+		}
+		kind, payload, rest, ok := cutOSC(out[i:])
+		if !ok {
+			return query
+		}
+		if kind == markerQuery {
+			query = &payload
+		}
+		out = rest
+	}
 }
 
 // match reports whether args fit the pattern, where a string is matched literally, a

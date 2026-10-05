@@ -96,17 +96,18 @@ Running a selection reloads every visible script, if the menu stays open with `s
 
 #### Keys
 
-| Key                                                       | Description                 |
-| --------------------------------------------------------- | --------------------------- |
-| <kbd>Enter</kbd>                                          | Run the selected line       |
-| <kbd>Shift+Enter</kbd>                                    | Run it, but keep cmenu open |
-| <kbd>Ctrl+r</kbd>                                         | Reload the selected script  |
-| <kbd>Up</kbd> / <kbd>Down</kbd>                           | Move                        |
-| <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd>               | Jump between scripts        |
-| <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd>            | Cycle which script is shown |
-| <kbd>Escape</kbd> / <kbd>Ctrl+c</kbd> / <kbd>Ctrl+d</kbd> | Quit                        |
-| Wheel up / down                                           | Move                        |
-| Click                                                     | Select, click again to run  |
+| Key                                            | Description                            |
+| ---------------------------------------------- | -------------------------------------- |
+| <kbd>Enter</kbd>                               | Run the selected line                  |
+| <kbd>Shift+Enter</kbd>                         | Run it, but keep cmenu open            |
+| <kbd>Ctrl+r</kbd>                              | Reload the selected script             |
+| <kbd>Up</kbd> / <kbd>Down</kbd>                | Move                                   |
+| <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd>    | Jump between scripts                   |
+| <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> | Cycle which script is shown            |
+| <kbd>Escape</kbd>                              | Go [back](#setting-the-query), or quit |
+| <kbd>Ctrl+c</kbd> / <kbd>Ctrl+d</kbd>          | Quit                                   |
+| Wheel up / down                                | Move                                   |
+| Click                                          | Select, click again to run             |
 
 ---
 
@@ -154,6 +155,23 @@ A script doesn't need a prefix. If the query starts with `#`, the next word is a
 - `#radio jazz` - show the radio script, filtered by `jazz`.
 
 <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> cycle through every script in config order, rewriting the query as `#<name>`, so the footer is walkable without remembering any prefix.
+
+#### Setting the query
+
+Running a line can replace what's typed with `cmenu query <query>`. cmenu stays open, shows the new query, and <kbd>Escape</kbd> goes back to the one before. While a line runs, two variables help build it:
+
+| Variable        | Description                                                            |
+| --------------- | ---------------------------------------------------------------------- |
+| `$CMENU_QUERY`  | Everything typed, e.g. `m [deepchord] album`                           |
+| `$CMENU_PREFIX` | What reaches this script with its own input, e.g. `m ` or `#subsonic ` |
+
+That makes drilling down a matter of setting your own input, and the script stays stateless, since the level it's on is in `$CMENU_INPUT`:
+
+```bash
+cmenu query "${CMENU_PREFIX}[artist:$id]" # list an artist's albums
+cmenu query "$CMENU_PREFIX"               # clear the input after adding something
+cmenu query "#wifi "                      # jump to another script
+```
 
 #### Markers
 
