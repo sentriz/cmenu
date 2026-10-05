@@ -51,11 +51,11 @@ func main() {
 		os.Exit(1)
 	}()
 
-	var startInput, file string
+	var startQuery, file string
 	var setArgs []string
 	switch args := os.Args[1:]; {
 	case match(args):
-	case match(args, "open", &startInput):
+	case match(args, "open", &startQuery):
 	case match(args, markerHighlight), match(args, markerStay), match(args, markerLabel):
 		fmt.Print(oscPrefix + args[0] + oscTerm)
 		return
@@ -78,7 +78,7 @@ func main() {
 		fmt.Print(oscPrefix + markerImagePath + ";" + file + oscTerm)
 		return
 	default:
-		quitErr = fmt.Errorf("usage: cmenu [open <input> | highlight | stay | label | set <key> <value>... | image <path>]")
+		quitErr = fmt.Errorf("usage: cmenu [open <query> | highlight | stay | label | set <key> <value>... | image <path>]")
 		return
 	}
 
@@ -194,7 +194,7 @@ func main() {
 	input := textinput.
 		New().
 		SetPrompt("> ").
-		SetContent(startInput)
+		SetContent(startQuery)
 	input.Prompt = vaxis.Style{Attribute: vaxis.AttrDim}
 
 	type previewKey struct {
@@ -277,11 +277,11 @@ func main() {
 		if keyDown {
 			autoPair(input, inputKey)
 		}
-		selectName, selected, scriptQuery, filterQuery := parseInput(input.String())
+		selectName, selected, scriptInput, filterQuery := parseQuery(input.String())
 
-		queryFor := func(scriptName string) string {
+		inputFor := func(scriptName string) string {
 			if _, ok := pickedScripts[scriptName]; ok {
-				return scriptQuery
+				return scriptInput
 			}
 			return ""
 		}
@@ -293,13 +293,13 @@ func main() {
 			}
 			stay = stay || ln.style.stay || sc.run.StayOpen
 			sc.executing = true
-			query, line := queryFor(sc.Name), ln.text
+			runInput, line := inputFor(sc.Name), ln.text
 			go func() {
 				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 				defer cancel()
 
 				spinner.start()
-				err := makeCmd(ctx, sc, modeRun, query, line).Run()
+				err := makeCmd(ctx, sc, modeRun, runInput, line).Run()
 				spinner.stop()
 				if err != nil {
 					vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
@@ -331,7 +331,7 @@ func main() {
 					cur = triggersPrefix[left][0]
 				}
 				input.SetContent(selectPrefix + cycleScript(scriptOrder, cur, dir) + " ")
-				selectName, selected, scriptQuery, filterQuery = parseInput(input.String())
+				selectName, selected, scriptInput, filterQuery = parseQuery(input.String())
 				index, scroll = 0, 0
 			case "Shift+Down":
 				index = stepGroup(visLines, index, +1)
@@ -350,7 +350,7 @@ func main() {
 				if !ok {
 					break
 				}
-				requestLoad(sc, queryFor(sc.Name))
+				requestLoad(sc, inputFor(sc.Name))
 			case "Enter", "Shift+Enter":
 				execute(ev.Modifiers&vaxis.ModShift != 0)
 			}
@@ -399,11 +399,11 @@ func main() {
 				return
 			}
 			for _, scriptName := range selectedScripts {
-				requestLoad(scripts[scriptName], queryFor(scriptName))
+				requestLoad(scripts[scriptName], inputFor(scriptName))
 			}
 		case eventInterval:
 			if !ev.sc.lastLoaded.IsZero() && slices.Contains(selectedScripts, ev.sc.Name) {
-				send(ev.sc.loads, loadReq{query: ev.sc.sentQuery, quiet: true})
+				send(ev.sc.loads, loadReq{input: ev.sc.sentInput, quiet: true})
 			}
 		case vaxis.SyncFunc:
 			ev()
@@ -443,14 +443,13 @@ func main() {
 			}
 		}
 
-		// invoke scripts that haven't been asked for this query yet, the worker debounces reloads
+		// invoke scripts that haven't been asked for this input yet, the worker debounces reloads
 		for _, scriptName := range selectedScripts {
 			script := scripts[scriptName]
-			query := queryFor(scriptName)
-			if script.sentQuerySet && script.sentQuery == query {
+			if script.sentInputSet && script.sentInput == inputFor(scriptName) {
 				continue
 			}
-			requestLoad(script, query)
+			requestLoad(script, inputFor(scriptName))
 		}
 
 		atTop := index <= step(visLines, -1, +1)
@@ -542,7 +541,7 @@ func main() {
 			lastPreviewKey = key
 			if previewSc != nil {
 				cols, rows := prevWin.Size()
-				send(previewSc.previews, previewReq{query: queryFor(previewSc.Name), line: previewLine, cols: cols, rows: rows})
+				send(previewSc.previews, previewReq{input: inputFor(previewSc.Name), line: previewLine, cols: cols, rows: rows})
 			}
 		}
 
@@ -677,8 +676,8 @@ type script struct {
 
 	executing     bool
 	lastLoaded    time.Time
-	sentQuery     string
-	sentQuerySet  bool
+	sentInput     string
+	sentInputSet  bool
 	lines         []item
 	run           scriptConf // config, plus whatever this run's set markers asked for
 	previewResult *preview
@@ -691,20 +690,20 @@ type item struct {
 	style   lineStyle
 }
 
-// requestLoad debounces only when this is a reload for a changed query, so first
+// requestLoad debounces only when this is a reload for a changed input, so first
 // loads, Ctrl+r, and post-exec reloads run immediately
-func requestLoad(sc *script, query string) {
+func requestLoad(sc *script, input string) {
 	var wait time.Duration
-	if sc.sentQuerySet && sc.sentQuery != query {
+	if sc.sentInputSet && sc.sentInput != input {
 		wait = sc.debounce
 	}
-	sc.sentQuery, sc.sentQuerySet = query, true
-	send(sc.loads, loadReq{query: query, wait: wait})
+	sc.sentInput, sc.sentInputSet = input, true
+	send(sc.loads, loadReq{input: input, wait: wait})
 }
 
-// cancelLoad stops any load in flight, and forgets the query so the script loads again once reselected
+// cancelLoad stops any load in flight, and forgets the input so the script loads again once reselected
 func cancelLoad(sc *script) {
-	sc.sentQuerySet = false
+	sc.sentInputSet = false
 	send(sc.loads, loadReq{cancel: true})
 }
 
@@ -777,7 +776,7 @@ func worker[T request](ctx context.Context, vx *vaxis.Vaxis, reqs chan T, run fu
 }
 
 type loadReq struct {
-	query  string
+	input  string
 	wait   time.Duration
 	quiet  bool
 	cancel bool
@@ -794,7 +793,7 @@ func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script,
 		defer spinner.stop()
 	}
 
-	lines, conf, err := loadScript(ctx, sc, req.query)
+	lines, conf, err := loadScript(ctx, sc, req.input)
 	if err != nil {
 		return fmt.Errorf("load script %q: %w", sc.Name, err)
 	}
@@ -804,13 +803,13 @@ func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script,
 	return nil
 }
 
-func loadScript(ctx context.Context, sc *script, query string) ([]item, scriptConf, error) {
+func loadScript(ctx context.Context, sc *script, input string) ([]item, scriptConf, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	start := time.Now()
 
-	cmd := makeCmd(ctx, sc, modeList, query, "")
+	cmd := makeCmd(ctx, sc, modeList, input, "")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, scriptConf{}, err
@@ -840,7 +839,7 @@ func loadScript(ctx context.Context, sc *script, query string) ([]item, scriptCo
 }
 
 type previewReq struct {
-	query, line string
+	input, line string
 	cols, rows  int
 }
 
@@ -864,7 +863,7 @@ func previewScript(ctx context.Context, sc *script, req previewReq) (*preview, e
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	out, err := makeCmd(ctx, sc, modePreview, req.query, req.line,
+	out, err := makeCmd(ctx, sc, modePreview, req.input, req.line,
 		fmt.Sprintf("CMENU_PREVIEW_COLS=%d", req.cols),
 		fmt.Sprintf("CMENU_PREVIEW_LINES=%d", req.rows),
 	).Output()
@@ -917,13 +916,13 @@ const (
 	modePreview = "preview"
 )
 
-func makeCmd(ctx context.Context, sc *script, mode, query, line string, extraEnv ...string) *exec.Cmd {
+func makeCmd(ctx context.Context, sc *script, mode, input, line string, extraEnv ...string) *exec.Cmd {
 	var args []string
 	if line != "" {
 		args = append(args, line)
 	}
 	cmd := exec.CommandContext(ctx, sc.Path, args...)
-	cmd.Env = append(cmd.Environ(), "CMENU_MODE="+mode, "CMENU_INPUT="+query)
+	cmd.Env = append(cmd.Environ(), "CMENU_MODE="+mode, "CMENU_INPUT="+input)
 	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
@@ -1211,10 +1210,10 @@ const (
 	scriptInputClose = "]"
 )
 
-// parseInput splits input like "#calc cc [1+3] 4" into the selected script name "calc",
-// scriptQuery "1+3" and filterQuery "cc 4". a leading selectPrefix always selects by name,
+// parseQuery splits a query like "#calc cc [1+3] 4" into the selected script name "calc",
+// scriptInput "1+3" and filterQuery "cc 4". a leading selectPrefix always selects by name,
 // so "#" alone selects nothing rather than falling back to the on-start scripts
-func parseInput(s string) (selectName string, selected bool, scriptQuery, filterQuery string) {
+func parseQuery(s string) (selectName string, selected bool, scriptInput, filterQuery string) {
 	if rest, ok := strings.CutPrefix(s, selectPrefix); ok {
 		selected = true
 		selectName, s, _ = strings.Cut(rest, " ")
@@ -1228,9 +1227,9 @@ func parseInput(s string) (selectName string, selected bool, scriptQuery, filter
 		return selectName, selected, "", s
 	}
 	cl += open
-	scriptQuery = s[open+1 : cl]
+	scriptInput = s[open+1 : cl]
 	filterQuery = strings.TrimLeft(s[:open], " ") + strings.TrimLeft(s[cl+1:], " ")
-	return selectName, selected, scriptQuery, filterQuery
+	return selectName, selected, scriptInput, filterQuery
 }
 
 func deleteBracketInput(input *textinput.Model, key vaxis.Key) bool {

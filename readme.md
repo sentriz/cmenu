@@ -53,7 +53,7 @@ windowrule = size 1000 600, class:cmenu
 
 Other terminals use a different flag for the same thing - `kitty --class cmenu`, `alacritty --class cmenu`, `wezterm start --class cmenu`. On X11 window managers, match on the class instead of the app ID.
 
-`cmenu open <input>` starts with the input already typed, so a second binding can go straight to a script, or past it to a script's own input - `cmenu open '#sway'`, `cmenu open 'c [1+34]'`.
+`cmenu open <query>` starts with the query already typed, so a second binding can go straight to a script, or past it to a script's own input - `cmenu open '#sway'`, `cmenu open 'c [1+34]'`.
 
 It also runs nice in a normal terminal or a tmux pane, which is handy while writing a script.
 
@@ -88,7 +88,7 @@ Config says when to run a script. Everything else, like its colour or hidden col
 | Trigger          | Description                                               |
 | ---------------- | --------------------------------------------------------- |
 | `on-start`       | Show when cmenu opens with no prefix typed                |
-| `pre <prefix>`   | Show when the input starts with `<prefix> `, e.g. `pre b` |
+| `pre <prefix>`   | Show when the query starts with `<prefix> `, e.g. `pre b` |
 | `script <name>`  | Show alongside script `<name>`                            |
 | `interval <dur>` | Reload every `<dur>` while visible, e.g. `interval 750ms` |
 
@@ -146,12 +146,12 @@ Only scripts picked by prefix or [name](#picking-a-script-by-name) get the input
 
 #### Picking a script by name
 
-A script doesn't need a prefix. If the input starts with `#`, the next word is a script `name`, and only that script is shown:
+A script doesn't need a prefix. If the query starts with `#`, the next word is a script `name`, and only that script is shown:
 
 - `#bluetooth` - show the bluetooth script, whatever its triggers are.
 - `#radio jazz` - show the radio script, filtered by `jazz`.
 
-<kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> cycle through every script in config order, rewriting the input as `#<name>`, so the footer is walkable without remembering any prefix.
+<kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> cycle through every script in config order, rewriting the query as `#<name>`, so the footer is walkable without remembering any prefix.
 
 #### Markers
 
