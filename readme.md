@@ -121,6 +121,8 @@ $ menu-radio "<line>" # one arg, act on the selected line
 
 That's a working menu. Everything below is extra, and there are [complete examples](#example-scripts) below.
 
+cmenu reads what a line prints, so anything a line leaves running in the background, like a player, needs its output sent elsewhere - `mpv "$url" >/dev/null &`.
+
 #### Previews
 
 With `preview = true`, the script is called with the selected line again, but with `CMENU_MODE=preview`, and whatever it prints goes in the side pane. `$CMENU_PREVIEW_COLS` and `$CMENU_PREVIEW_LINES` give the size of the pane.
@@ -227,7 +229,7 @@ if [[ "$#" -gt 0 ]]; then
     kill "$current_pid" 2>/dev/null
     [[ "$1" = "$current_station" ]] && exit
 
-    mpv --no-video --quiet "$RADIO_DIR/$1" &
+    mpv --no-video --quiet "$RADIO_DIR/$1" >/dev/null &
     echo -e "$!\t$1" >"$pidfile"
     exit
 fi

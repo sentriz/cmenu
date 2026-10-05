@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -298,9 +299,16 @@ func main() {
 				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 				defer cancel()
 
+				cmd := makeCmd(ctx, sc, modeRun, runInput, line)
+				cmd.Stdout = io.Discard
+
 				spinner.start()
-				err := makeCmd(ctx, sc, modeRun, runInput, line).Run()
+				err := cmd.Run()
 				spinner.stop()
+				if errors.Is(err, exec.ErrWaitDelay) {
+					vx.PostEvent(quitErrorf("run script item for %q: a background job kept its output open, end it with >/dev/null &", sc.Name))
+					return
+				}
 				if err != nil {
 					vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
 					return
