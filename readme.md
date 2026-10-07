@@ -102,11 +102,11 @@ Input only reaches scripts picked by prefix or name, not `on-start` or `script <
 
 A script is called in one of three modes:
 
-| Mode    | Call                                    | Prints                    |
-| ------- | --------------------------------------- | ------------------------- |
-| list    | `script`                                | The lines                 |
-| run     | `script "<line>"`                       | Nothing, or a run command |
-| preview | `script "<line>"`, `CMENU_MODE=preview` | The preview pane          |
+| Mode    | Call                                    | Prints           |
+| ------- | --------------------------------------- | ---------------- |
+| list    | `script`                                | The lines        |
+| run     | `script "<line>"`                       | Nothing          |
+| preview | `script "<line>"`, `CMENU_MODE=preview` | The preview pane |
 
 | Variable                                      | Description                               |
 | --------------------------------------------- | ----------------------------------------- |
@@ -120,14 +120,12 @@ The smallest script prints lines, and acts on `$1`:
 #!/usr/bin/env bash
 
 if [[ "$#" -gt 0 ]]; then
-    mpv "$RADIO_DIR/$1" >/dev/null &
+    mpv "$RADIO_DIR/$1" &
     exit
 fi
 
 ls "$RADIO_DIR"
 ```
-
-cmenu reads what a run prints, so anything left in the background needs its output sent elsewhere, like `>/dev/null &` above.
 
 Lines can be split into columns by tabs. cmenu pads them so they line up, except the last, which is free text. Hidden columns stay in `$1`, so column 1 is the place for an ID:
 
@@ -141,7 +139,7 @@ IFS=$'\t' read -r id _ <<<"$1"
 
 ### Commands
 
-Commands print markers that cmenu reads from the script's output. Each mode reads its own.
+Commands print markers that cmenu reads from the lines and the preview.
 
 #### List
 
@@ -163,31 +161,23 @@ Commands print markers that cmenu reads from the script's output. Each mode read
 
 Printed as part of a line:
 
-| Command           | Description                                     |
-| ----------------- | ----------------------------------------------- |
-| `cmenu highlight` | Mark the line as current, e.g. the playing song |
-| `cmenu label`     | Make the line a non-selectable heading          |
-| `cmenu stay`      | Stay open after running the line                |
+| Command               | Description                                                             |
+| --------------------- | ----------------------------------------------------------------------- |
+| `cmenu highlight`     | Mark the line as current, e.g. the playing song                         |
+| `cmenu label`         | Make the line a non-selectable heading                                  |
+| `cmenu stay`          | Stay open after running the line                                        |
+| `cmenu back`          | [Go back](#going-back) after running the line, with a `<` when selected |
+| `cmenu query <query>` | Go to `<query>` instead of running the line, with a `>` when selected   |
+| `cmenu input <input>` | Same, replacing what follows the script's prefix                        |
+
+`query` and `input` push the old query, so <kbd>Escape</kbd> returns to it. Drilling down keeps the script stateless, since the level it's on is in `$CMENU_INPUT`:
 
 ```bash
 printf '%s%s\n' "$(cmenu highlight)" "$station"
-```
-
-#### Run
-
-| Command               | Description                              |
-| --------------------- | ---------------------------------------- |
-| `cmenu query <query>` | Replace the whole query                  |
-| `cmenu input <input>` | Replace what follows the script's prefix |
-| `cmenu back`          | [Go back](#going-back)                   |
-
-The last one printed wins. `query` and `input` push the old query, so <kbd>Escape</kbd> returns to it. Drilling down keeps the script stateless, since the level it's on is in `$CMENU_INPUT`:
-
-```bash
-cmenu input "[artist:$id]"    # list an artist's albums
-cmenu input "[rename:$id "    # leave [ open, to type into the input
-cmenu query "#wifi "          # jump to another script
-todo done "$id" && cmenu back # act, and return to where it came from
+printf '%s%s\n' "$(cmenu input "[artist:$id]")" "$name" # list an artist's albums
+printf '%s%s\n' "$(cmenu input "[rename:$id ")" rename # leave [ open, to type into the input
+printf '%s%s\n' "$(cmenu query "#wifi ")" wifi         # jump to another script
+printf '%s%s\n' "$(cmenu back)" "new:$CMENU_INPUT"     # add what was typed, and return to the list
 ```
 
 #### Preview
@@ -201,13 +191,11 @@ todo done "$id" && cmenu back # act, and return to where it came from
 
 ### Going back
 
-<kbd>Escape</kbd> and `cmenu back` step out one level:
+<kbd>Escape</kbd>, and running a `cmenu back` line, step out one level:
 
 1. To the query before the last `cmenu query` or `cmenu input`.
 2. Otherwise, to the script's prefix, clearing anything typed after it.
-3. Otherwise, <kbd>Escape</kbd> quits, and `cmenu back` does nothing.
-
-So a script that adds something typed in `[ ]` can `cmenu back` to its list.
+3. Otherwise, <kbd>Escape</kbd> quits, and a `cmenu back` line just runs.
 
 ---
 

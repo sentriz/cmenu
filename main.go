@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -200,7 +199,7 @@ func main() {
 
 	input := textinput.
 		New().
-		SetPrompt("> ").
+		SetPrompt(prompt + " ").
 		SetContent(startQuery)
 	input.Prompt = vaxis.Style{Attribute: vaxis.AttrDim}
 
@@ -236,7 +235,7 @@ func main() {
 	var listW int
 
 	active := func() (*script, line, bool) {
-		if index < 0 || index >= len(visLines) || visLines[index].style.label {
+		if index < 0 || index >= len(visLines) || visLines[index].marks.label {
 			return nil, line{}, false
 		}
 		item := visLines[index]
@@ -246,7 +245,7 @@ func main() {
 	// step returns the next non-label line from `from` in direction `dir`, or `from` if there is none
 	step := func(lines []line, from, dir int) int {
 		for i := from + dir; i >= 0 && i < len(lines); i += dir {
-			if !lines[i].style.label {
+			if !lines[i].marks.label {
 				return i
 			}
 		}
@@ -288,48 +287,6 @@ func main() {
 			return ""
 		}
 
-		execute := func(stay bool) {
-			sc, ln, ok := active()
-			if !ok || sc.executing {
-				return
-			}
-			stay = stay || ln.style.stay || sc.run.StayOpen
-			sc.executing = true
-			runInput, line := inputFor(sc.Name), ln.text
-
-			prefix := selectPrefix + sc.Name + " "
-			if _, ok := pickedScripts[sc.Name]; ok {
-				prefix = pickedPrefix
-			}
-
-			go func() {
-				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				defer cancel()
-
-				var out strings.Builder
-				cmd := makeCmd(ctx, sc, modeRun, runInput, line)
-				cmd.Stdout = &out
-
-				spinner.start()
-				err := cmd.Run()
-				spinner.stop()
-				if errors.Is(err, exec.ErrWaitDelay) {
-					vx.PostEvent(quitErrorf("run script item for %q: a background job kept its output open, end it with >/dev/null &", sc.Name))
-					return
-				}
-				if err != nil {
-					vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
-					return
-				}
-
-				nav, payload := parseRun(out.String())
-				if nav == markerInput {
-					nav, payload = markerQuery, prefix+payload
-				}
-				vx.PostEvent(eventExecDone{sc: sc, stay: stay, nav: nav, payload: payload})
-			}()
-		}
-
 		setQuery := func(query string) {
 			input.SetContent(query)
 			selectName, selected, scriptInput, filterQuery = parseQuery(input.String())
@@ -337,6 +294,45 @@ func main() {
 			for _, scriptName := range selectedScripts {
 				scripts[scriptName].sentInputSet = false
 			}
+		}
+
+		execute := func(stay bool) {
+			sc, ln, ok := active()
+			if !ok || sc.executing {
+				return
+			}
+			if ln.marks.nav != "" {
+				query := ln.marks.payload
+				if ln.marks.nav == markerInput {
+					prefix := selectPrefix + sc.Name + " "
+					if _, ok := pickedScripts[sc.Name]; ok {
+						prefix = pickedPrefix
+					}
+					query = prefix + query
+				}
+				back = append(back, input.String())
+				setQuery(query)
+				return
+			}
+
+			stay = stay || ln.marks.stay || sc.run.StayOpen
+			sc.executing = true
+			runInput, line := inputFor(sc.Name), ln.text
+
+			go func() {
+				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+
+				spinner.start()
+				err := makeCmd(ctx, sc, modeRun, runInput, line).Run()
+				spinner.stop()
+				if err != nil {
+					vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
+					return
+				}
+
+				vx.PostEvent(eventExecDone{sc: sc, stay: stay, back: ln.marks.back})
+			}()
 		}
 
 		// goBack restores the query before the last cmenu query, or else clears what's typed after the script
@@ -419,7 +415,7 @@ func main() {
 				if ev.Col >= listW || i < 0 || i >= len(visRows) || visRows[i].gap {
 					break
 				}
-				if ln := visRows[i].line; !visLines[ln].style.label {
+				if ln := visRows[i].line; !visLines[ln].marks.label {
 					if ln == index {
 						execute(ev.Modifiers&vaxis.ModShift != 0)
 					}
@@ -443,10 +439,7 @@ func main() {
 		case eventExecDone:
 			ev.sc.executing = false
 			switch {
-			case ev.nav == markerQuery:
-				back = append(back, input.String())
-				setQuery(ev.payload)
-			case ev.nav == markerBack && goBack():
+			case ev.back && goBack():
 			case !ev.stay:
 				return
 			default:
@@ -520,7 +513,7 @@ func main() {
 				var scriptVisible bool
 				for _, it := range script.lines {
 					// a query is looking for something to run, and labels are never that
-					if filterQuery != "" && (it.style.label || !matches(it.display, filterQuery, fuzz)) {
+					if filterQuery != "" && (it.marks.label || !matches(it.display, filterQuery, fuzz)) {
 						continue
 					}
 					visLines = append(visLines, line{script: scriptName, item: it})
@@ -542,7 +535,7 @@ func main() {
 
 		// keep cursor off labels
 		index = clamp(index, 0, len(visLines)-1)
-		if index >= 0 && visLines[index].style.label {
+		if index >= 0 && visLines[index].marks.label {
 			if n := step(visLines, index, +1); n != index {
 				index = n
 			} else {
@@ -614,7 +607,18 @@ func main() {
 				continue
 			}
 			it := visLines[r.line]
-			drawLine(listWin, i-scroll, scripts[it.script], r.text, it.style, r.line == index && !it.style.label)
+			selected := r.line == index && !it.marks.label
+
+			var hint string
+			if selected && (i+1 == len(visRows) || visRows[i+1].gap || visRows[i+1].line != r.line) {
+				switch {
+				case it.marks.nav != "":
+					hint = " " + prompt
+				case it.marks.back:
+					hint = " " + promptBack
+				}
+			}
+			drawLine(listWin, i-scroll, scripts[it.script], r.text, hint, it.marks, selected)
 		}
 
 		if previewSc != nil {
@@ -672,10 +676,9 @@ type eventPreview struct {
 }
 
 type eventExecDone struct {
-	sc      *script
-	stay    bool
-	nav     string
-	payload string
+	sc   *script
+	stay bool
+	back bool
 }
 
 type eventInterval struct{ sc *script }
@@ -745,7 +748,7 @@ type script struct {
 type item struct {
 	text    string // the line as the script printed it, markers removed
 	display string // what the list shows: hidden columns dropped, the rest padded
-	style   lineStyle
+	marks   lineMarks
 }
 
 // requestLoad debounces only when this is a reload for a changed input, so first
@@ -1018,8 +1021,8 @@ func parseItems(raw []string, conf scriptConf) ([]item, scriptConf) {
 			continue
 		}
 
-		text, style := parseLine(r)
-		items = append(items, item{text: text, style: style})
+		text, marks := parseLine(r)
+		items = append(items, item{text: text, marks: marks})
 
 		delim := cmp.Or(conf.Delimiter, defaultDelimiter)
 		var shown []string
@@ -1070,12 +1073,12 @@ func textWidth(text string) int {
 
 const linePrefix = 2
 
-func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle, selected bool) {
+func drawLine(win vaxis.Window, i int, script *script, text, hint string, marks lineMarks, selected bool) {
 	col := "▌"
 	switch {
-	case ls.highlight:
+	case marks.highlight:
 		col = "█"
-	case ls.label:
+	case marks.label:
 		col = " "
 	}
 
@@ -1083,10 +1086,10 @@ func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle
 	if selected {
 		style.Attribute |= vaxis.AttrReverse
 	}
-	if ls.highlight {
+	if marks.highlight {
 		style.Attribute |= vaxis.AttrBold
 	}
-	if ls.label {
+	if marks.label {
 		style.Attribute |= vaxis.AttrDim
 	}
 
@@ -1094,6 +1097,7 @@ func drawLine(win vaxis.Window, i int, script *script, text string, ls lineStyle
 		vaxis.Segment{Text: col, Style: vaxis.Style{Foreground: vaxis.IndexColor(uint8(script.run.Colour))}},
 		vaxis.Segment{Text: " "},
 		vaxis.Segment{Text: text, Style: style},
+		vaxis.Segment{Text: hint, Style: vaxis.Style{Attribute: vaxis.AttrDim}},
 	)
 }
 
@@ -1263,6 +1267,8 @@ func (s *spinner) draw(w vaxis.Window) {
 }
 
 const (
+	prompt           = ">"
+	promptBack       = "<"
 	selectPrefix     = "#"
 	scriptInputOpen  = "["
 	scriptInputClose = "]"
@@ -1350,10 +1356,13 @@ func subsequence(line, tok []rune) bool {
 	return false
 }
 
-type lineStyle struct {
+type lineMarks struct {
 	highlight bool
 	stay      bool
 	label     bool
+	back      bool
+	nav       string
+	payload   string
 }
 
 // escape code is 6366, or the first 4 numbers of ASCII "cmenu" in hex
@@ -1387,45 +1396,29 @@ func cutOSC(s string) (kind, payload, rest string, ok bool) {
 	return kind, payload, rest, true
 }
 
-// parseLine returns the line with its markers removed, and the style they asked for
-func parseLine(raw string) (text string, style lineStyle) {
+// parseLine returns the line with its markers removed, and what they asked for
+func parseLine(raw string) (text string, marks lineMarks) {
 	text = raw
 	for {
-		kind, _, stripped, ok := cutOSC(text)
+		kind, payload, stripped, ok := cutOSC(text)
 		if !ok {
 			break
 		}
 		text = stripped
 		switch kind {
 		case markerHighlight:
-			style.highlight = true
+			marks.highlight = true
 		case markerStay:
-			style.stay = true
+			marks.stay = true
 		case markerLabel:
-			style.label = true
+			marks.label = true
+		case markerBack:
+			marks.back = true
+		case markerQuery, markerInput:
+			marks.nav, marks.payload = kind, payload
 		}
 	}
-	return text, style
-}
-
-// parseRun returns the last of cmenu query, input, or back a line printed, and its payload. Markers
-// can land mid-line, since none print a newline
-func parseRun(out string) (nav, payload string) {
-	for {
-		i := strings.Index(out, oscPrefix)
-		if i < 0 {
-			return nav, payload
-		}
-		kind, p, rest, ok := cutOSC(out[i:])
-		if !ok {
-			return nav, payload
-		}
-		switch kind {
-		case markerQuery, markerInput, markerBack:
-			nav, payload = kind, p
-		}
-		out = rest
-	}
+	return text, marks
 }
 
 // match reports whether args fit the pattern, where a string is matched literally, a
