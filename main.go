@@ -52,13 +52,16 @@ func main() {
 		os.Exit(1)
 	}()
 
-	var startQuery, nextQuery, file string
+	var startQuery, nextQuery, nextInput, file string
 	var setArgs []string
 	switch args := os.Args[1:]; {
 	case match(args):
 	case match(args, "open", &startQuery):
 	case match(args, markerQuery, &nextQuery):
 		fmt.Print(oscPrefix + markerQuery + ";" + nextQuery + oscTerm)
+		return
+	case match(args, markerInput, &nextInput):
+		fmt.Print(oscPrefix + markerInput + ";" + nextInput + oscTerm)
 		return
 	case match(args, markerHighlight), match(args, markerStay), match(args, markerLabel), match(args, markerBack):
 		fmt.Print(oscPrefix + args[0] + oscTerm)
@@ -82,7 +85,7 @@ func main() {
 		fmt.Print(oscPrefix + markerImagePath + ";" + file + oscTerm)
 		return
 	default:
-		quitErr = fmt.Errorf("usage: cmenu [open <query> | query <query> | back | highlight | stay | label | set <key> <value>... | image <path>]")
+		quitErr = fmt.Errorf("usage: cmenu [open <query> | query <query> | input <input> | back | highlight | stay | label | set <key> <value>... | image <path>]")
 		return
 	}
 
@@ -302,14 +305,13 @@ func main() {
 			if _, ok := pickedScripts[sc.Name]; ok {
 				prefix = pickedPrefix
 			}
-			env := []string{"CMENU_QUERY=" + input.String(), "CMENU_PREFIX=" + prefix}
 
 			go func() {
 				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 				defer cancel()
 
 				var out strings.Builder
-				cmd := makeCmd(ctx, sc, modeRun, runInput, line, env...)
+				cmd := makeCmd(ctx, sc, modeRun, runInput, line)
 				cmd.Stdout = &out
 
 				spinner.start()
@@ -325,6 +327,9 @@ func main() {
 				}
 
 				nav, payload := parseRun(out.String())
+				if nav == markerInput {
+					nav, payload = markerQuery, prefix+payload
+				}
 				vx.PostEvent(eventExecDone{sc: sc, stay: stay, nav: nav, payload: payload})
 			}()
 		}
@@ -1403,6 +1408,7 @@ const (
 	markerStay      = "stay"
 	markerLabel     = "label"
 	markerQuery     = "query"
+	markerInput     = "input"
 	markerBack      = "back"
 	markerSet       = "set"
 	markerImageData = "image-data"
@@ -1443,8 +1449,8 @@ func parseLine(raw string) (text string, style lineStyle) {
 	return text, style
 }
 
-// parseRun returns the last of cmenu query or back a line printed, and its payload. Markers can land
-// mid-line, since neither prints a newline
+// parseRun returns the last of cmenu query, input, or back a line printed, and its payload. Markers
+// can land mid-line, since none print a newline
 func parseRun(out string) (nav, payload string) {
 	for {
 		i := strings.Index(out, oscPrefix)
@@ -1456,7 +1462,7 @@ func parseRun(out string) (nav, payload string) {
 			return nav, payload
 		}
 		switch kind {
-		case markerQuery, markerBack:
+		case markerQuery, markerInput, markerBack:
 			nav, payload = kind, p
 		}
 		out = rest

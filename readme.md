@@ -158,27 +158,22 @@ A script doesn't need a prefix. If the query starts with `#`, the next word is a
 
 #### Setting the query
 
-Running a line can replace what's typed with `cmenu query <query>`. cmenu stays open, shows the new query, and <kbd>Escape</kbd> goes back to the one before. While a line runs, two variables help build it:
-
-| Variable        | Description                                                            |
-| --------------- | ---------------------------------------------------------------------- |
-| `$CMENU_QUERY`  | Everything typed, e.g. `m [deepchord] album`                           |
-| `$CMENU_PREFIX` | What reaches this script with its own input, e.g. `m ` or `#subsonic ` |
+Running a line can replace what's typed with `cmenu query <query>`, or just what follows the script's prefix, like `m ` or `#subsonic `, with `cmenu input <input>`. cmenu stays open, shows the new query, and <kbd>Escape</kbd> goes back to the one before.
 
 That makes drilling down a matter of setting your own input, and the script stays stateless, since the level it's on is in `$CMENU_INPUT`:
 
 ```bash
-cmenu query "${CMENU_PREFIX}[artist:$id]" # list an artist's albums
-cmenu query "#wifi "                      # jump to another script
+cmenu input "[artist:$id]" # list an artist's albums
+cmenu query "#wifi "       # jump to another script
 ```
 
 An unclosed `[` runs to the end of the query, so leaving off the `]` puts the cursor in the input, ready to type:
 
 ```bash
-cmenu query "${CMENU_PREFIX}[rename:$id " # ask for a new name
+cmenu input "[rename:$id " # ask for a new name
 ```
 
-Going back steps out one level: to the query before the last `cmenu query`, or with none, to just the script's prefix, clearing anything typed after it. <kbd>Escape</kbd> goes back, and quits once there's nowhere left to go.
+Going back steps out one level: to the query before the last `cmenu query` or `cmenu input`, or with none, to just the script's prefix, clearing anything typed after it. <kbd>Escape</kbd> goes back, and quits once there's nowhere left to go.
 
 `cmenu back` does the same from a line, so it can act on what it drilled into, or what was typed, and return to where it came from:
 
