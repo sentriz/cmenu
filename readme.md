@@ -84,18 +84,17 @@ Input only reaches scripts picked by prefix or name, not `on-start` or `script <
 
 ### Keys
 
-| Key                                            | Description                           |
-| ---------------------------------------------- | ------------------------------------- |
-| <kbd>Enter</kbd>                               | Run the selected line                 |
-| <kbd>Shift+Enter</kbd>                         | Run it, and stay open                 |
-| <kbd>Escape</kbd>                              | [Go back](#going-back), or quit       |
-| <kbd>Ctrl+r</kbd>                              | Reload the selected script            |
-| <kbd>Ctrl+w</kbd>                              | After a `]`, delete the whole `[...]` |
-| <kbd>Up</kbd> / <kbd>Down</kbd>                | Move                                  |
-| <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd>    | Jump between scripts                  |
-| <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> | Cycle through scripts as `#<name>`    |
-| <kbd>Ctrl+c</kbd> / <kbd>Ctrl+d</kbd>          | Quit                                  |
-| Wheel / click                                  | Move / select, click again to run     |
+| Key                                            | Description                        |
+| ---------------------------------------------- | ---------------------------------- |
+| <kbd>Enter</kbd>                               | Run the selected line              |
+| <kbd>Shift+Enter</kbd>                         | Run it, and stay open              |
+| <kbd>Escape</kbd>                              | [Go back](#going-back), or quit    |
+| <kbd>Ctrl+r</kbd>                              | Reload the selected script         |
+| <kbd>Up</kbd> / <kbd>Down</kbd>                | Move                               |
+| <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd>    | Jump between scripts               |
+| <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> | Cycle through scripts as `#<name>` |
+| <kbd>Ctrl+c</kbd> / <kbd>Ctrl+d</kbd>          | Quit                               |
+| Wheel / click                                  | Move / select, click again to run  |
 
 ---
 

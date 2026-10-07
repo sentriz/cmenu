@@ -278,11 +278,7 @@ func main() {
 		width, height := win.Size()
 		rows := max(height-4, 0)
 
-		inputKey, keyDown := ev.(vaxis.Key)
-		keyDown = keyDown && inputKey.EventType != vaxis.EventRelease
-		if !keyDown || !deleteBracketInput(input, inputKey) {
-			input.Update(ev)
-		}
+		input.Update(ev)
 		selectName, selected, scriptInput, filterQuery := parseQuery(input.String())
 
 		inputFor := func(scriptName string) string {
@@ -1293,43 +1289,6 @@ func parseQuery(s string) (selectName string, selected bool, scriptInput, filter
 	scriptInput = s[open+1 : cl]
 	filterQuery = strings.TrimLeft(s[:open], " ") + strings.TrimLeft(s[cl+1:], " ")
 	return selectName, selected, scriptInput, filterQuery
-}
-
-func deleteBracketInput(input *textinput.Model, key vaxis.Key) bool {
-	if key.String() != "Ctrl+w" {
-		return false
-	}
-
-	chars := input.Characters()
-	cursor := input.CursorPosition()
-	if cursor == 0 || chars[cursor-1].Grapheme != scriptInputClose {
-		return false
-	}
-
-	depth := 0
-	for i := cursor - 1; i >= 0; i-- {
-		switch chars[i].Grapheme {
-		case scriptInputClose:
-			depth++
-		case scriptInputOpen:
-			depth--
-			if depth == 0 {
-				chars = slices.Delete(chars, i, cursor)
-				var content strings.Builder
-				for _, char := range chars {
-					content.WriteString(char.Grapheme)
-				}
-
-				input.SetContent(content.String())
-				// SetContent parks the cursor at the end, and there is no way to place it directly
-				for range len(chars) - i {
-					input.Update(vaxis.Key{Keycode: vaxis.KeyLeft})
-				}
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func cycleScript(order []string, cur string, dir int) string {
