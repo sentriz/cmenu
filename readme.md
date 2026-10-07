@@ -6,236 +6,213 @@ _A script multiplexer_
 
 I had a bunch of dmenu scripts with a keybinding for each one, and I could never remember which key was which.
 
-- A menu is just an executable script which prints lines.
-- cmenu runs the scripts, they don't run cmenu.
-- One keybinding for all of them - scripts are picked by prefix, `b ` for bluetooth, or `on-start` for none at all. Or by name with `#<name>`, or by cycling with <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd>.
-- Several scripts can be shown at once, in one list, each with its own colour.
-- Because cmenu runs them, scripts can be re-run - on an interval, after a selection, or with <kbd>Ctrl+r</kbd>. One script can even trigger another.
-- Optional preview pane, filled by the same script - called again with the selected line, printing text or an image.
-- Nothing is bundled - write your own, or copy someone else's and change it.
-
----
-
-### Compared to `script | dmenu`
-
-A script is more than a one-shot pipe:
-
-- It can be re-run while the menu is open, so the lines stay live.
-- It can be shown alongside another - the audio menu brings the bluetooth menu with it.
-- It gets the selected line back as `$1`, instead of you parsing dmenu's stdout.
+- A menu is an executable script that prints lines. cmenu runs the scripts, they don't run cmenu.
+- One keybinding for all of them. Scripts are picked by prefix, by name, or shown on start.
+- Several scripts can share one list, each in its own colour, and one can bring another along.
+- Scripts re-run while open - on an interval, after a selection, or with <kbd>Ctrl+r</kbd> - so lines stay live.
+- The selected line comes back to the script as `$1`, and the same script can fill a preview pane.
+- Nothing is bundled. Write your own, or copy [someone else's](https://github.com/sentriz/dotfiles/tree/master/conf_desktop/.local/bin/desktop/menus).
 
 ---
 
 ### Install
 
-Install from source with [Go](https://go.dev/doc/install) and `$ go install go.senan.xyz/cmenu@latest`.
+```
+$ go install go.senan.xyz/cmenu@latest
+```
 
----
-
-### Running it
-
-cmenu is a terminal program, so it's launched in a terminal of its own, and the compositor floats that window. Give the terminal an app ID so it can be matched, then bind it to something nice.
-
-Sway:
+cmenu is a terminal program. Launch it in a terminal with an app ID, and float that window:
 
 ```
+# sway
 bindsym Mod4+space exec foot --app-id cmenu cmenu
 for_window [app_id="cmenu"] floating enable, resize set 1000 600, border none
-```
 
-Hyprland:
-
-```
+# hyprland
 bind = SUPER, space, exec, foot --app-id cmenu cmenu
 windowrule = float, class:cmenu
 windowrule = size 1000 600, class:cmenu
 ```
 
-Other terminals use a different flag for the same thing - `kitty --class cmenu`, `alacritty --class cmenu`, `wezterm start --class cmenu`. On X11 window managers, match on the class instead of the app ID.
+Other terminals: `kitty --class cmenu`, `alacritty --class cmenu`, `wezterm start --class cmenu`. On X11, match on the class.
 
-`cmenu open <query>` starts with the query already typed, so a second binding can go straight to a script, or past it to a script's own input - `cmenu open '#sway'`, `cmenu open 'c [1+34]'`.
-
-It also runs nice in a normal terminal or a tmux pane, which is handy while writing a script.
+`cmenu open <query>` starts with a query typed, e.g. `cmenu open '#sway'` or `cmenu open 'c [1+34]'`.
 
 ---
 
-### Configuration
+### Config
 
-Config lives in `$XDG_CONFIG_HOME/cmenu/config.toml`, and is a list of scripts.
+`$XDG_CONFIG_HOME/cmenu/config.toml` is a list of scripts:
 
 ```toml
 [[scripts]]
   triggers = ["on-start", "pre b", "script audio", "interval 750ms"]
   name = "bluetooth"
   path = "menu-bluetooth"
-
-[[scripts]]
-  triggers = ["pre pw", "pre pass"]
-  name = "pass"
-  path = "menu-pass"
 ```
 
-| Key        | Description                                                   |
-| ---------- | ------------------------------------------------------------- |
-| `triggers` | When to show and load this script, see [triggers](#triggers)  |
-| `name`     | Name shown in the gutter, and referenced by `script` triggers |
-| `path`     | Path to the script, looked up in `$PATH` if not absolute      |
+| Key        | Description                                                |
+| ---------- | ---------------------------------------------------------- |
+| `triggers` | When to show and load the script                           |
+| `name`     | Shown in the gutter, used by `#<name>` and `script <name>` |
+| `path`     | Absolute, or looked up in `$PATH`                          |
 
-Config says when to run a script. Everything else, like its colour or hidden columns, is the script's own business, printed with [`cmenu set`](#settings).
+| Trigger          | Description                                    |
+| ---------------- | ---------------------------------------------- |
+| `on-start`       | Show when no prefix is typed                   |
+| `pre <prefix>`   | Show when the query starts with `<prefix> `    |
+| `script <name>`  | Show alongside script `<name>`                 |
+| `interval <dur>` | Reload every `<dur>` while shown, e.g. `750ms` |
 
-#### Triggers
-
-| Trigger          | Description                                               |
-| ---------------- | --------------------------------------------------------- |
-| `on-start`       | Show when cmenu opens with no prefix typed                |
-| `pre <prefix>`   | Show when the query starts with `<prefix> `, e.g. `pre b` |
-| `script <name>`  | Show alongside script `<name>`                            |
-| `interval <dur>` | Reload every `<dur>` while visible, e.g. `interval 750ms` |
-
-Running a selection reloads every visible script, if the menu stays open with `stay_open`.
-
-#### Keys
-
-| Key                                            | Description                            |
-| ---------------------------------------------- | -------------------------------------- |
-| <kbd>Enter</kbd>                               | Run the selected line                  |
-| <kbd>Shift+Enter</kbd>                         | Run it, but keep cmenu open            |
-| <kbd>Ctrl+r</kbd>                              | Reload the selected script             |
-| <kbd>Up</kbd> / <kbd>Down</kbd>                | Move                                   |
-| <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd>    | Jump between scripts                   |
-| <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> | Cycle which script is shown            |
-| <kbd>Escape</kbd>                              | Go [back](#setting-the-query), or quit |
-| <kbd>Ctrl+c</kbd> / <kbd>Ctrl+d</kbd>          | Quit                                   |
-| Wheel up / down                                | Move                                   |
-| Click                                          | Select, click again to run             |
+Everything else, like colour or hidden columns, is up to the script with [`cmenu set`](#list).
 
 ---
 
-### Writing a script
+### Query
 
-The whole thing is two calls:
+| Query                 | Meaning                                                            |
+| --------------------- | ------------------------------------------------------------------ |
+| `b `                  | Show scripts with trigger `pre b`                                  |
+| `#bluetooth `         | Show the script named `bluetooth`, whatever its triggers           |
+| `b jbl`               | Filter the shown lines by `jbl`                                    |
+| `m [deepchord] album` | Run the script with input `deepchord`, filter its lines by `album` |
+| `m [deepchord`        | An unclosed `[` runs to the end                                    |
 
-```shell
-$ menu-radio          # no args, print the lines
-$ menu-radio "<line>" # one arg, act on the selected line
-```
+Input only reaches scripts picked by prefix or name, not `on-start` or `script <name>` ones. Each change re-runs the script, so set a `debounce`.
 
-That's a working menu. Everything below is extra, and there are [complete examples](#example-scripts) below.
+---
 
-cmenu reads what a line prints, so anything a line leaves running in the background, like a player, needs its output sent elsewhere - `mpv "$url" >/dev/null &`.
+### Keys
 
-#### Previews
+| Key                                            | Description                           |
+| ---------------------------------------------- | ------------------------------------- |
+| <kbd>Enter</kbd>                               | Run the selected line                 |
+| <kbd>Shift+Enter</kbd>                         | Run it, and stay open                 |
+| <kbd>Escape</kbd>                              | [Go back](#going-back), or quit       |
+| <kbd>Ctrl+r</kbd>                              | Reload the selected script            |
+| <kbd>Ctrl+w</kbd>                              | After a `]`, delete the whole `[...]` |
+| <kbd>Up</kbd> / <kbd>Down</kbd>                | Move                                  |
+| <kbd>Shift+Up</kbd> / <kbd>Shift+Down</kbd>    | Jump between scripts                  |
+| <kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> | Cycle through scripts as `#<name>`    |
+| <kbd>Ctrl+c</kbd> / <kbd>Ctrl+d</kbd>          | Quit                                  |
+| Wheel / click                                  | Move / select, click again to run     |
 
-With `preview = true`, the script is called with the selected line again, but with `CMENU_MODE=preview`, and whatever it prints goes in the side pane. `$CMENU_PREVIEW_COLS` and `$CMENU_PREVIEW_LINES` give the size of the pane.
+---
 
-```shell
-if [[ "$CMENU_MODE" = "preview" ]]; then
-    ...
+### Scripts
+
+A script is called in one of three modes:
+
+| Mode    | Call                                    | Prints                    |
+| ------- | --------------------------------------- | ------------------------- |
+| list    | `script`                                | The lines                 |
+| run     | `script "<line>"`                       | Nothing, or a run command |
+| preview | `script "<line>"`, `CMENU_MODE=preview` | The preview pane          |
+
+| Variable                                      | Description                               |
+| --------------------------------------------- | ----------------------------------------- |
+| `$CMENU_MODE`                                 | `list`, `run`, or `preview`               |
+| `$CMENU_INPUT`                                | Text inside `[ ]`                         |
+| `$CMENU_PREVIEW_COLS`, `$CMENU_PREVIEW_LINES` | Size of the preview pane, in preview mode |
+
+The smallest script prints lines, and acts on `$1`:
+
+```bash
+#!/usr/bin/env bash
+
+if [[ "$#" -gt 0 ]]; then
+    mpv "$RADIO_DIR/$1" >/dev/null &
+    exit
 fi
+
+ls "$RADIO_DIR"
 ```
 
-#### Input
+cmenu reads what a run prints, so anything left in the background needs its output sent elsewhere, like `>/dev/null &` above.
 
-Most scripts need no input at all - they just print their lines, and what you type filters them.
-
-But some scripts can't print anything until you've told them what you want - a calculator, a search against a server, a chat assistant. For those, text typed inside `[` `]` is passed to the script as `$CMENU_INPUT`, and re-runs it. The `]` is only needed to filter after the input, an unclosed `[` runs to the end:
-
-- `c [1+34]` - `c` picks the calculator menu, which is called with `CMENU_INPUT=1+34` and prints the result.
-- `m [deepchord] album` - `m` picks the subsonic menu, which searches the server for `deepchord`, and `album` filters those results down to the album lines.
-
-Text outside the brackets filters the lines cmenu already has. Text inside them runs the script again, so give bracket scripts a `debounce` to keep that off every keystroke.
-
-Only scripts picked by prefix or [name](#picking-a-script-by-name) get the input. `on-start` scripts, and scripts shown alongside with `script <name>`, run without it.
-
-#### Picking a script by name
-
-A script doesn't need a prefix. If the query starts with `#`, the next word is a script `name`, and only that script is shown:
-
-- `#bluetooth` - show the bluetooth script, whatever its triggers are.
-- `#radio jazz` - show the radio script, filtered by `jazz`.
-
-<kbd>Shift+Left</kbd> / <kbd>Shift+Right</kbd> cycle through every script in config order, rewriting the query as `#<name>`, so the footer is walkable without remembering any prefix.
-
-#### Setting the query
-
-Running a line can replace what's typed with `cmenu query <query>`, or just what follows the script's prefix, like `m ` or `#subsonic `, with `cmenu input <input>`. cmenu stays open, shows the new query, and <kbd>Escape</kbd> goes back to the one before.
-
-That makes drilling down a matter of setting your own input, and the script stays stateless, since the level it's on is in `$CMENU_INPUT`:
-
-```bash
-cmenu input "[artist:$id]" # list an artist's albums
-cmenu query "#wifi "       # jump to another script
-```
-
-An unclosed `[` runs to the end of the query, so leaving off the `]` puts the cursor in the input, ready to type:
-
-```bash
-cmenu input "[rename:$id " # ask for a new name
-```
-
-Going back steps out one level: to the query before the last `cmenu query` or `cmenu input`, or with none, to just the script's prefix, clearing anything typed after it. <kbd>Escape</kbd> goes back, and quits once there's nowhere left to go.
-
-`cmenu back` does the same from a line, so it can act on what it drilled into, or what was typed, and return to where it came from:
-
-```bash
-todo done "$id" && cmenu back # mark a task done, and return to its list
-todo new "$@" && cmenu back   # add a task typed in [ ], and return to the list
-```
-
-#### Markers
-
-Lines are plain text, tab-separated if you want columns, which cmenu pads so they line up, even across lines with different column counts. The last column is never padded, so long free text belongs there. A few markers are available as subcommands, printed as part of a line:
-
-| Command              | Description                                          |
-| -------------------- | ---------------------------------------------------- |
-| `cmenu highlight`    | Mark this line as current, e.g. the connected device |
-| `cmenu label`        | Mark this line as a non-selectable label             |
-| `cmenu stay`         | Keep cmenu open after running this line              |
-| `cmenu image <path>` | In preview mode, render an image instead of text     |
-| `cmenu image -`      | Same, reading the image from stdin                   |
-
-#### Settings
-
-A script says how it wants to be shown by printing `cmenu set` before its lines:
-
-```bash
-cmenu set \
-    colour 1 \
-    preview true \
-    hide 1
-
-rbw list --fields id --fields folder --fields name --fields user
-```
-
-| Key         | Description                                            |
-| ----------- | ------------------------------------------------------ |
-| `colour`    | Terminal colour index for this script's rows           |
-| `preview`   | Run the script again in preview mode for the cursor    |
-| `stay_open` | Keep cmenu open after running a line                   |
-| `wrap`      | Wrap long lines instead of cutting them                |
-| `hide`      | Columns to keep out of the list, like `1` or `2,5`     |
-| `delimiter` | What separates columns, tab by default                 |
-| `debounce`  | How long to let typing settle before reloading, e.g. `300ms` |
-
-`hide` and `delimiter` act on the lines after them, the rest on the whole run, last one wins. Print `cmenu set` after any preview or run mode branch so it only reaches the list.
-
-Hidden columns never reach the list or the filter, but stay in the line handed back to your script:
+Lines can be split into columns by tabs. cmenu pads them so they line up, except the last, which is free text. Hidden columns stay in `$1`, so column 1 is the place for an ID:
 
 ```bash
 IFS=$'\t' read -r id _ <<<"$1"
 ```
 
-Tab is IFS whitespace, so `read` skips empty columns. Keep the columns you read ahead of any that can be empty. Column 1 is the safe spot, and it can pack several values with a separator of your own:
-
-```bash
-IFS=: read -r con_id port tab <<<"$id"
-```
-
-Free text that might hold tabs of its own wants them squashed, with something like `gsub(/\t/, " ")`, or it draws as columns.
+`read` skips empty columns, so keep the ones you read ahead of any that can be empty. Squash tabs in free text, e.g. `gsub(/\t/, " ")`.
 
 ---
 
-### Example scripts
+### Commands
+
+Commands print markers that cmenu reads from the script's output. Each mode reads its own.
+
+#### List
+
+`cmenu set <key> <value>...` configures the script. Print it before the lines, after any run or preview branch.
+
+| Key         | Description                                              |
+| ----------- | -------------------------------------------------------- |
+| `colour`    | Terminal colour index for the script's rows              |
+| `preview`   | Call the script in preview mode for the cursor           |
+| `stay_open` | Stay open after running a line, and reload               |
+| `wrap`      | Wrap long lines instead of cutting them                  |
+| `hide`      | Columns to keep out of the list, e.g. `1` or `2,5`       |
+| `delimiter` | Column separator, tab by default                         |
+| `debounce`  | Wait for typing to settle before reloading, e.g. `300ms` |
+
+`hide` and `delimiter` apply to the lines after them. The rest apply to the whole list, and the last one wins.
+
+#### Line
+
+Printed as part of a line:
+
+| Command           | Description                                     |
+| ----------------- | ----------------------------------------------- |
+| `cmenu highlight` | Mark the line as current, e.g. the playing song |
+| `cmenu label`     | Make the line a non-selectable heading          |
+| `cmenu stay`      | Stay open after running the line                |
+
+```bash
+printf '%s%s\n' "$(cmenu highlight)" "$station"
+```
+
+#### Run
+
+| Command               | Description                              |
+| --------------------- | ---------------------------------------- |
+| `cmenu query <query>` | Replace the whole query                  |
+| `cmenu input <input>` | Replace what follows the script's prefix |
+| `cmenu back`          | [Go back](#going-back)                   |
+
+The last one printed wins. `query` and `input` push the old query, so <kbd>Escape</kbd> returns to it. Drilling down keeps the script stateless, since the level it's on is in `$CMENU_INPUT`:
+
+```bash
+cmenu input "[artist:$id]"    # list an artist's albums
+cmenu input "[rename:$id "    # leave [ open, to type into the input
+cmenu query "#wifi "          # jump to another script
+todo done "$id" && cmenu back # act, and return to where it came from
+```
+
+#### Preview
+
+| Command              | Description                        |
+| -------------------- | ---------------------------------- |
+| `cmenu image <path>` | Show an image instead of text      |
+| `cmenu image -`      | Same, reading the image from stdin |
+
+---
+
+### Going back
+
+<kbd>Escape</kbd> and `cmenu back` step out one level:
+
+1. To the query before the last `cmenu query` or `cmenu input`.
+2. Otherwise, to the script's prefix, clearing anything typed after it.
+3. Otherwise, <kbd>Escape</kbd> quits, and `cmenu back` does nothing.
+
+So a script that adds something typed in `[ ]` can `cmenu back` to its list.
+
+---
+
+### Examples
 
 <details>
 <summary><code>menu-radio</code> - highlights the playing station, previews it with <code>ffprobe</code></summary>
@@ -261,6 +238,8 @@ if [[ "$#" -gt 0 ]]; then
     exit
 fi
 
+cmenu set preview true
+
 highlight="$(cmenu highlight)"
 
 find "$RADIO_DIR" -maxdepth 1 -type f -printf "%f\n" | sort | while read -r station; do
@@ -283,6 +262,8 @@ if [[ "$#" -gt 0 ]]; then
     exit
 fi
 
+cmenu set debounce 300ms
+
 [[ -z "$CMENU_INPUT" ]] && { echo "$(cmenu label)type an expression in [ ]"; exit; }
 
 result="$(awk "BEGIN { print $CMENU_INPUT }" 2>/dev/null)"
@@ -291,13 +272,7 @@ result="$(awk "BEGIN { print $CMENU_INPUT }" 2>/dev/null)"
 echo "$result"
 ```
 
-With `cmenu set debounce 300ms` so it isn't run on every keystroke.
-
 </details>
-
-More examples from the author, to copy and change:
-
-<https://github.com/sentriz/dotfiles/tree/master/conf_desktop/.local/bin/desktop/menus>
 
 ---
 
@@ -306,7 +281,7 @@ More examples from the author, to copy and change:
 <details>
 <summary>Why a terminal program and not a GUI?</summary>
 
-The terminal already handles fonts, colours, images, and window rules, and scripts already speak stdout.
+The terminal already handles fonts, colours, images, and window rules, and scripts already speak stdout. It also runs in a normal terminal or tmux pane, which is handy while writing a script.
 
 </details>
 
@@ -314,12 +289,5 @@ The terminal already handles fonts, colours, images, and window rules, and scrip
 <summary>Is this like Raycast, Alfred, rofi?</summary>
 
 It's similar, but there are no extensions or integrations - cmenu only renders lines from your scripts, and re-runs them.
-
-</details>
-
-<details>
-<summary>How do I hide the ID column I use for lookups?</summary>
-
-Print `cmenu set hide` with its column, see [settings](#settings). Your script still gets the full line back in `$1`.
 
 </details>
