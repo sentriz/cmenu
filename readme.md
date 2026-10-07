@@ -138,7 +138,7 @@ fi
 
 Most scripts need no input at all - they just print their lines, and what you type filters them.
 
-But some scripts can't print anything until you've told them what you want - a calculator, a search against a server, a chat assistant. For those, text typed inside `[` `]` is passed to the script as `$CMENU_INPUT`, and re-runs it:
+But some scripts can't print anything until you've told them what you want - a calculator, a search against a server, a chat assistant. For those, text typed inside `[` `]` is passed to the script as `$CMENU_INPUT`, and re-runs it. The `]` is only needed to filter after the input, an unclosed `[` runs to the end:
 
 - `c [1+34]` - `c` picks the calculator menu, which is called with `CMENU_INPUT=1+34` and prints the result.
 - `m [deepchord] album` - `m` picks the subsonic menu, which searches the server for `deepchord`, and `album` filters those results down to the album lines.
@@ -170,6 +170,12 @@ That makes drilling down a matter of setting your own input, and the script stay
 ```bash
 cmenu query "${CMENU_PREFIX}[artist:$id]" # list an artist's albums
 cmenu query "#wifi "                      # jump to another script
+```
+
+An unclosed `[` runs to the end of the query, so leaving off the `]` puts the cursor in the input, ready to type:
+
+```bash
+cmenu query "${CMENU_PREFIX}[rename:$id " # ask for a new name
 ```
 
 Going back steps out one level: to the query before the last `cmenu query`, or with none, to just the script's prefix, clearing anything typed after it. <kbd>Escape</kbd> goes back, and quits once there's nowhere left to go.

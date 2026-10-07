@@ -280,9 +280,6 @@ func main() {
 		if !keyDown || !deleteBracketInput(input, inputKey) {
 			input.Update(ev)
 		}
-		if keyDown {
-			autoPair(input, inputKey)
-		}
 		selectName, selected, scriptInput, filterQuery := parseQuery(input.String())
 
 		inputFor := func(scriptName string) string {
@@ -1272,7 +1269,8 @@ const (
 
 // parseQuery splits a query like "#calc cc [1+3] 4" into the selected script name "calc",
 // scriptInput "1+3" and filterQuery "cc 4". a leading selectPrefix always selects by name,
-// so "#" alone selects nothing rather than falling back to the on-start scripts
+// so "#" alone selects nothing rather than falling back to the on-start scripts. an unclosed "[" runs to
+// the end, so a script can set a query that leaves the cursor in its input
 func parseQuery(s string) (selectName string, selected bool, scriptInput, filterQuery string) {
 	if rest, ok := strings.CutPrefix(s, selectPrefix); ok {
 		selected = true
@@ -1284,7 +1282,7 @@ func parseQuery(s string) (selectName string, selected bool, scriptInput, filter
 	}
 	cl := strings.Index(s[open:], scriptInputClose)
 	if cl < 0 {
-		return selectName, selected, "", s
+		return selectName, selected, s[open+1:], strings.TrimLeft(s[:open], " ")
 	}
 	cl += open
 	scriptInput = s[open+1 : cl]
@@ -1311,41 +1309,22 @@ func deleteBracketInput(input *textinput.Model, key vaxis.Key) bool {
 		case scriptInputOpen:
 			depth--
 			if depth == 0 {
-				setInput(input, slices.Delete(chars, i, cursor), i)
+				chars = slices.Delete(chars, i, cursor)
+				var content strings.Builder
+				for _, char := range chars {
+					content.WriteString(char.Grapheme)
+				}
+
+				input.SetContent(content.String())
+				// SetContent parks the cursor at the end, and there is no way to place it directly
+				for range len(chars) - i {
+					input.Update(vaxis.Key{Keycode: vaxis.KeyLeft})
+				}
 				return true
 			}
 		}
 	}
 	return false
-}
-
-func autoPair(input *textinput.Model, key vaxis.Key) {
-	chars := input.Characters()
-	cursor := input.CursorPosition()
-
-	switch {
-	case key.Text == scriptInputOpen:
-		chars = slices.Insert(chars, cursor, vaxis.Characters(scriptInputClose)...)
-	case key.Text == scriptInputClose && cursor < len(chars) && chars[cursor].Grapheme == scriptInputClose:
-		chars = slices.Delete(chars, cursor, cursor+1)
-	default:
-		return
-	}
-
-	setInput(input, chars, cursor)
-}
-
-func setInput(input *textinput.Model, chars []vaxis.Character, cursor int) {
-	var content strings.Builder
-	for _, char := range chars {
-		content.WriteString(char.Grapheme)
-	}
-
-	input.SetContent(content.String())
-	// SetContent parks the cursor at the end, and there is no way to place it directly
-	for range len(chars) - cursor {
-		input.Update(vaxis.Key{Keycode: vaxis.KeyLeft})
-	}
 }
 
 func cycleScript(order []string, cur string, dir int) string {
