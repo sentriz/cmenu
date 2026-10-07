@@ -169,8 +169,16 @@ That makes drilling down a matter of setting your own input, and the script stay
 
 ```bash
 cmenu query "${CMENU_PREFIX}[artist:$id]" # list an artist's albums
-cmenu query "$CMENU_PREFIX"               # clear the input after adding something
 cmenu query "#wifi "                      # jump to another script
+```
+
+Going back steps out one level: to the query before the last `cmenu query`, or with none, to just the script's prefix, clearing anything typed after it. <kbd>Escape</kbd> goes back, and quits once there's nowhere left to go.
+
+`cmenu back` does the same from a line, so it can act on what it drilled into, or what was typed, and return to where it came from:
+
+```bash
+todo done "$id" && cmenu back # mark a task done, and return to its list
+todo new "$@" && cmenu back   # add a task typed in [ ], and return to the list
 ```
 
 #### Markers

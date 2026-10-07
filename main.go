@@ -60,7 +60,7 @@ func main() {
 	case match(args, markerQuery, &nextQuery):
 		fmt.Print(oscPrefix + markerQuery + ";" + nextQuery + oscTerm)
 		return
-	case match(args, markerHighlight), match(args, markerStay), match(args, markerLabel):
+	case match(args, markerHighlight), match(args, markerStay), match(args, markerLabel), match(args, markerBack):
 		fmt.Print(oscPrefix + args[0] + oscTerm)
 		return
 	case match(args, markerSet, &setArgs):
@@ -82,7 +82,7 @@ func main() {
 		fmt.Print(oscPrefix + markerImagePath + ";" + file + oscTerm)
 		return
 	default:
-		quitErr = fmt.Errorf("usage: cmenu [open <query> | query <query> | highlight | stay | label | set <key> <value>... | image <path>]")
+		quitErr = fmt.Errorf("usage: cmenu [open <query> | query <query> | back | highlight | stay | label | set <key> <value>... | image <path>]")
 		return
 	}
 
@@ -327,7 +327,8 @@ func main() {
 					return
 				}
 
-				vx.PostEvent(eventExecDone{sc: sc, stay: stay, query: parseRun(out.String())})
+				nav, payload := parseRun(out.String())
+				vx.PostEvent(eventExecDone{sc: sc, stay: stay, nav: nav, payload: payload})
 			}()
 		}
 
@@ -340,6 +341,21 @@ func main() {
 			}
 		}
 
+		// goBack restores the query before the last cmenu query, or else clears what's typed after the script
+		// prefix. it reports false when there's nowhere left to go
+		goBack := func() bool {
+			if len(back) > 0 {
+				setQuery(back[len(back)-1])
+				back = back[:len(back)-1]
+				return true
+			}
+			if input.String() != pickedPrefix {
+				setQuery(pickedPrefix)
+				return true
+			}
+			return false
+		}
+
 		switch ev := ev.(type) {
 		case vaxis.Key:
 			if ev.EventType == vaxis.EventRelease {
@@ -347,11 +363,9 @@ func main() {
 			}
 			switch ev.String() {
 			case "Escape":
-				if len(back) == 0 {
+				if !goBack() {
 					return
 				}
-				setQuery(back[len(back)-1])
-				back = back[:len(back)-1]
 			case "Ctrl+c", "Ctrl+d":
 				return
 			case "Down":
@@ -430,16 +444,17 @@ func main() {
 			ev.sc.previewLine = ev.line
 		case eventExecDone:
 			ev.sc.executing = false
-			if ev.query != nil {
+			switch {
+			case ev.nav == markerQuery:
 				back = append(back, input.String())
-				setQuery(*ev.query)
-				break
-			}
-			if !ev.stay {
+				setQuery(ev.payload)
+			case ev.nav == markerBack && goBack():
+			case !ev.stay:
 				return
-			}
-			for _, scriptName := range selectedScripts {
-				requestLoad(scripts[scriptName], inputFor(scriptName))
+			default:
+				for _, scriptName := range selectedScripts {
+					requestLoad(scripts[scriptName], inputFor(scriptName))
+				}
 			}
 		case eventInterval:
 			if !ev.sc.lastLoaded.IsZero() && slices.Contains(selectedScripts, ev.sc.Name) {
@@ -659,9 +674,10 @@ type eventPreview struct {
 }
 
 type eventExecDone struct {
-	sc    *script
-	stay  bool
-	query *string
+	sc      *script
+	stay    bool
+	nav     string
+	payload string
 }
 
 type eventInterval struct{ sc *script }
@@ -1408,6 +1424,7 @@ const (
 	markerStay      = "stay"
 	markerLabel     = "label"
 	markerQuery     = "query"
+	markerBack      = "back"
 	markerSet       = "set"
 	markerImageData = "image-data"
 	markerImagePath = "image-path"
@@ -1447,21 +1464,21 @@ func parseLine(raw string) (text string, style lineStyle) {
 	return text, style
 }
 
-// parseRun returns the last query a line asked for with cmenu query, if any. Markers can land
-// mid-line, since cmenu query prints no newline
-func parseRun(out string) *string {
-	var query *string
+// parseRun returns the last of cmenu query or back a line printed, and its payload. Markers can land
+// mid-line, since neither prints a newline
+func parseRun(out string) (nav, payload string) {
 	for {
 		i := strings.Index(out, oscPrefix)
 		if i < 0 {
-			return query
+			return nav, payload
 		}
-		kind, payload, rest, ok := cutOSC(out[i:])
+		kind, p, rest, ok := cutOSC(out[i:])
 		if !ok {
-			return query
+			return nav, payload
 		}
-		if kind == markerQuery {
-			query = &payload
+		switch kind {
+		case markerQuery, markerBack:
+			nav, payload = kind, p
 		}
 		out = rest
 	}
