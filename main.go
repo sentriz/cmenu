@@ -21,7 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"syscall"
 	"time"
 
@@ -304,13 +304,17 @@ func main() {
 		return ""
 	}
 
-	setQuery := func(query string) {
+	reload := func(spin time.Duration) {
+		for _, scriptName := range sel.scripts {
+			requestLoad(scripts[scriptName], inputFor(scriptName), 0, spin)
+		}
+	}
+
+	setQuery := func(query string, spin time.Duration) {
 		input.SetContent(query)
 		sel = resolveQuery(query)
 		index, scroll = 0, 0
-		for _, scriptName := range sel.scripts {
-			scripts[scriptName].sentInputSet = false
-		}
+		reload(spin)
 	}
 
 	execute := func(stay bool) {
@@ -328,7 +332,7 @@ func main() {
 				query = prefix + query
 			}
 			back = append(back, input.String())
-			setQuery(query)
+			setQuery(query, 0)
 			return
 		}
 
@@ -340,7 +344,7 @@ func main() {
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
-			spinner.start()
+			spinner.start(0)
 			err := makeCmd(ctx, sc, modeRun, runInput, line).Run()
 			spinner.stop()
 			if err != nil {
@@ -356,12 +360,12 @@ func main() {
 	// prefix. it reports false when there's nowhere left to go
 	goBack := func() bool {
 		if len(back) > 0 {
-			setQuery(back[len(back)-1])
+			setQuery(back[len(back)-1], spinnerDelay)
 			back = back[:len(back)-1]
 			return true
 		}
 		if input.String() != sel.prefix {
-			setQuery(sel.prefix)
+			setQuery(sel.prefix, spinnerDelay)
 			return true
 		}
 		return false
@@ -409,7 +413,7 @@ func main() {
 				} else if sc, _, ok := active(); ok {
 					cur = sc.Name
 				}
-				setQuery(selectPrefix + cycleScript(scriptOrder, cur, dir) + " ")
+				setQuery(selectPrefix+cycleScript(scriptOrder, cur, dir)+" ", spinnerDelay)
 			case "Shift+Down":
 				index = stepGroup(visLines, index, +1)
 			case "Shift+Up":
@@ -424,12 +428,10 @@ func main() {
 				index = max(index-rows+1, 0)
 			case "Ctrl+r":
 				if sc, _, ok := active(); ok {
-					requestLoad(sc, inputFor(sc.Name))
+					requestLoad(sc, inputFor(sc.Name), 0, 0)
 					break
 				}
-				for _, scriptName := range sel.scripts {
-					requestLoad(scripts[scriptName], inputFor(scriptName))
-				}
+				reload(0)
 			case "Enter", "Shift+Enter":
 				execute(ev.Modifiers&vaxis.ModShift != 0)
 			}
@@ -479,9 +481,7 @@ func main() {
 			case !ev.stay:
 				return
 			default:
-				for _, scriptName := range sel.scripts {
-					requestLoad(scripts[scriptName], inputFor(scriptName))
-				}
+				reload(spinnerDelay)
 			}
 		case eventInterval:
 			if !ev.sc.lastLoaded.IsZero() && slices.Contains(sel.scripts, ev.sc.Name) {
@@ -499,13 +499,17 @@ func main() {
 			}
 		}
 
-		// invoke scripts that haven't been asked for this input yet, the worker debounces reloads
+		// invoke scripts that haven't been asked for this input yet, debouncing when it's typing that changed it
 		for _, scriptName := range sel.scripts {
 			script := scripts[scriptName]
 			if script.sentInputSet && script.sentInput == inputFor(scriptName) {
 				continue
 			}
-			requestLoad(script, inputFor(scriptName))
+			var wait time.Duration
+			if script.sentInputSet {
+				wait = script.debounce
+			}
+			requestLoad(script, inputFor(scriptName), wait, spinnerDelay)
 		}
 
 		atTop := index <= step(visLines, -1, +1)
@@ -758,15 +762,10 @@ type item struct {
 	marks   lineMarks
 }
 
-// requestLoad debounces only when this is a reload for a changed input, so first
-// loads, Ctrl+r, and post-exec reloads run immediately
-func requestLoad(sc *script, input string) {
-	var wait time.Duration
-	if sc.sentInputSet && sc.sentInput != input {
-		wait = sc.debounce
-	}
+// requestLoad asks for a load after wait, which shows a spinner once it has run for spin
+func requestLoad(sc *script, input string, wait, spin time.Duration) {
 	sc.sentInput, sc.sentInputSet = input, true
-	send(sc.loads, loadReq{input: input, wait: wait})
+	send(sc.loads, loadReq{input: input, wait: wait, spin: spin})
 }
 
 // cancelLoad stops any load in flight, and forgets the input so the script loads again once reselected
@@ -846,6 +845,7 @@ func worker[T request](ctx context.Context, vx *vaxis.Vaxis, reqs chan T, run fu
 type loadReq struct {
 	input  string
 	wait   time.Duration
+	spin   time.Duration
 	quiet  bool
 	cancel bool
 }
@@ -857,7 +857,7 @@ func runLoad(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script,
 		return nil
 	}
 	if !req.quiet {
-		spinner.start()
+		spinner.start(req.spin)
 		defer spinner.stop()
 	}
 
@@ -914,7 +914,7 @@ type previewReq struct {
 func (previewReq) debounce() time.Duration { return previewDebounce }
 
 func runPreview(ctx context.Context, vx *vaxis.Vaxis, spinner *spinner, sc *script, req previewReq) error {
-	spinner.start()
+	spinner.start(spinnerDelay)
 	defer spinner.stop()
 
 	pv, err := previewScript(ctx, sc, req)
@@ -1239,13 +1239,19 @@ func drawFooter(win vaxis.Window, conf config, selectedScripts, visScripts, pick
 	win.Println(0, footSegs...)
 }
 
-// spinners only appear once work has run for spinnerDelay, so quick scripts don't flash one
-const spinnerDelay = 150 * time.Millisecond
+// callers say how long work runs before it shows a spinner: spinnerDelay when the user didn't ask for it directly, so
+// quick scripts don't show one, or 0 when they did. once shown, a spinner stays for spinnerMin so it doesn't flash
+const (
+	spinnerDelay = 150 * time.Millisecond
+	spinnerMin   = 300 * time.Millisecond
+)
 
 type spinner struct {
-	model   *vxspinner.Model
-	count   atomic.Int32
-	started atomic.Int64
+	model  *vxspinner.Model
+	mu     sync.Mutex
+	count  int
+	showAt time.Time
+	hide   *time.Timer
 }
 
 func newSpinner(vx *vaxis.Vaxis, duration time.Duration, frames string) *spinner {
@@ -1256,21 +1262,46 @@ func newSpinner(vx *vaxis.Vaxis, duration time.Duration, frames string) *spinner
 	}
 }
 
-func (s *spinner) start() {
-	if s.count.Add(1) == 1 {
-		s.started.Store(time.Now().UnixNano())
+func (s *spinner) start(delay time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	shown := s.hide != nil && s.hide.Stop()
+	s.hide = nil
+
+	showAt := time.Now().Add(delay)
+	if !shown && (s.count == 0 || showAt.Before(s.showAt)) {
+		s.showAt = showAt
+	}
+
+	s.count++
+	if s.count == 1 {
 		s.model.Start()
 	}
 }
 
 func (s *spinner) stop() {
-	if s.count.Add(-1) == 0 {
-		s.model.Stop()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.count--
+	if s.count > 0 {
+		return
 	}
+
+	shownFor := time.Since(s.showAt)
+	if shownFor < 0 {
+		s.model.Stop()
+		return
+	}
+	s.hide = time.AfterFunc(spinnerMin-shownFor, s.model.Stop)
 }
 
 func (s *spinner) draw(w vaxis.Window) {
-	if s.count.Load() == 0 || time.Since(time.Unix(0, s.started.Load())) < spinnerDelay {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if time.Now().Before(s.showAt) {
 		return
 	}
 	s.model.Draw(w)
