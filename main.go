@@ -472,7 +472,9 @@ func main() {
 			}
 			ev.sc.lastLoaded = time.Now()
 		case eventPreview:
-			ev.sc.previewResult = ev.pv
+			if old := ev.sc.previewResult; old == nil || !bytes.Equal(old.out, ev.pv.out) {
+				ev.sc.previewResult = ev.pv
+			}
 			ev.sc.previewLine = ev.line
 		case eventExecDone:
 			ev.sc.executing = false
@@ -640,7 +642,7 @@ func main() {
 			if pv != nil && ready {
 				divHeight = rows
 				if pv.img == nil {
-					divHeight = clamp(strings.Count(strings.TrimRight(pv.text, "\n"), "\n")+1, 0, rows)
+					divHeight = clamp(bytes.Count(bytes.TrimRight(pv.out, "\n"), []byte("\n"))+1, 0, rows)
 				}
 			}
 
@@ -946,14 +948,14 @@ func previewScript(ctx context.Context, sc *script, req previewReq) (*preview, e
 }
 
 type preview struct {
-	text string
-	img  image.Image
+	out []byte
+	img image.Image
 }
 
 func parsePreview(out []byte) (*preview, error) {
 	kind, payload, _, ok := cutOSC(string(out))
 	if !ok {
-		return &preview{text: string(out)}, nil
+		return &preview{out: out}, nil
 	}
 
 	var r io.Reader
@@ -968,14 +970,14 @@ func parsePreview(out []byte) (*preview, error) {
 		defer f.Close()
 		r = f
 	default:
-		return &preview{text: string(out)}, nil
+		return &preview{out: out}, nil
 	}
 
 	img, _, err := image.Decode(r)
 	if err != nil {
 		return nil, err
 	}
-	return &preview{img: img}, nil
+	return &preview{out: out, img: img}, nil
 }
 
 const (
@@ -1184,7 +1186,7 @@ func (st *imageState) draw(win vaxis.Window, vx *vaxis.Vaxis, pv *preview) {
 			st.cur.Draw(win)
 		}
 	} else if pv != nil {
-		win.Print(styledSegments(vx, pv.text)...)
+		win.Print(styledSegments(vx, string(pv.out))...)
 	}
 }
 
