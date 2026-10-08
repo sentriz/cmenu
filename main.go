@@ -213,10 +213,41 @@ func main() {
 
 	var index int
 	var scroll int
-	var selectedScripts []string
-	var pickedScripts = map[string]struct{}{}
-	var pickedPrefix string
 	var back []string
+
+	type selection struct {
+		scripts []string
+		picked  []string
+		prefix  string
+		input   string
+		filter  string
+	}
+	var sel selection
+
+	resolveQuery := func(query string) selection {
+		selectName, selected, input, filter := parseQuery(query)
+		sel := selection{input: input, filter: filter}
+
+		left, after, hasPrefix := strings.Cut(filter, " ")
+		switch {
+		case selected:
+			if scripts[selectName] != nil {
+				sel.picked = []string{selectName}
+				sel.prefix = selectPrefix + selectName + " "
+			}
+		case hasPrefix && len(triggersPrefix[left]) > 0:
+			sel.picked = triggersPrefix[left]
+			sel.prefix = left + " "
+			sel.filter = after
+		default:
+			sel.scripts = slices.Clone(triggersOnStart)
+		}
+		for _, scriptName := range sel.picked {
+			sel.scripts = append(sel.scripts, scriptName)
+			sel.scripts = append(sel.scripts, triggersScript[scriptName]...)
+		}
+		return sel
+	}
 
 	type line struct {
 		script string
@@ -266,6 +297,76 @@ func main() {
 		return cur
 	}
 
+	inputFor := func(scriptName string) string {
+		if slices.Contains(sel.picked, scriptName) {
+			return sel.input
+		}
+		return ""
+	}
+
+	setQuery := func(query string) {
+		input.SetContent(query)
+		sel = resolveQuery(query)
+		index, scroll = 0, 0
+		for _, scriptName := range sel.scripts {
+			scripts[scriptName].sentInputSet = false
+		}
+	}
+
+	execute := func(stay bool) {
+		sc, ln, ok := active()
+		if !ok || sc.executing {
+			return
+		}
+		if ln.marks.nav != "" {
+			query := ln.marks.payload
+			if ln.marks.nav == markerInput {
+				prefix := selectPrefix + sc.Name + " "
+				if slices.Contains(sel.picked, sc.Name) {
+					prefix = sel.prefix
+				}
+				query = prefix + query
+			}
+			back = append(back, input.String())
+			setQuery(query)
+			return
+		}
+
+		stay = stay || ln.marks.stay || sc.run.StayOpen
+		sc.executing = true
+		runInput, line := inputFor(sc.Name), ln.text
+
+		go func() {
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+
+			spinner.start()
+			err := makeCmd(ctx, sc, modeRun, runInput, line).Run()
+			spinner.stop()
+			if err != nil {
+				vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
+				return
+			}
+
+			vx.PostEvent(eventExecDone{sc: sc, stay: stay, back: ln.marks.back})
+		}()
+	}
+
+	// goBack restores the query before the last cmenu query, or else clears what's typed after the script
+	// prefix. it reports false when there's nowhere left to go
+	goBack := func() bool {
+		if len(back) > 0 {
+			setQuery(back[len(back)-1])
+			back = back[:len(back)-1]
+			return true
+		}
+		if input.String() != sel.prefix {
+			setQuery(sel.prefix)
+			return true
+		}
+		return false
+	}
+
 	for ev := range vx.Events() {
 		if rs, ok := ev.(vaxis.Resize); ok {
 			vx.Resize(rs)
@@ -277,78 +378,9 @@ func main() {
 		width, height := win.Size()
 		rows := max(height-4, 0)
 
+		lastSelected := sel.scripts
 		input.Update(ev)
-		selectName, selected, scriptInput, filterQuery := parseQuery(input.String())
-
-		inputFor := func(scriptName string) string {
-			if _, ok := pickedScripts[scriptName]; ok {
-				return scriptInput
-			}
-			return ""
-		}
-
-		setQuery := func(query string) {
-			input.SetContent(query)
-			selectName, selected, scriptInput, filterQuery = parseQuery(input.String())
-			index, scroll = 0, 0
-			for _, scriptName := range selectedScripts {
-				scripts[scriptName].sentInputSet = false
-			}
-		}
-
-		execute := func(stay bool) {
-			sc, ln, ok := active()
-			if !ok || sc.executing {
-				return
-			}
-			if ln.marks.nav != "" {
-				query := ln.marks.payload
-				if ln.marks.nav == markerInput {
-					prefix := selectPrefix + sc.Name + " "
-					if _, ok := pickedScripts[sc.Name]; ok {
-						prefix = pickedPrefix
-					}
-					query = prefix + query
-				}
-				back = append(back, input.String())
-				setQuery(query)
-				return
-			}
-
-			stay = stay || ln.marks.stay || sc.run.StayOpen
-			sc.executing = true
-			runInput, line := inputFor(sc.Name), ln.text
-
-			go func() {
-				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				defer cancel()
-
-				spinner.start()
-				err := makeCmd(ctx, sc, modeRun, runInput, line).Run()
-				spinner.stop()
-				if err != nil {
-					vx.PostEvent(quitErrorf("run script item for %q: %w", sc.Name, err))
-					return
-				}
-
-				vx.PostEvent(eventExecDone{sc: sc, stay: stay, back: ln.marks.back})
-			}()
-		}
-
-		// goBack restores the query before the last cmenu query, or else clears what's typed after the script
-		// prefix. it reports false when there's nowhere left to go
-		goBack := func() bool {
-			if len(back) > 0 {
-				setQuery(back[len(back)-1])
-				back = back[:len(back)-1]
-				return true
-			}
-			if input.String() != pickedPrefix {
-				setQuery(pickedPrefix)
-				return true
-			}
-			return false
-		}
+		sel = resolveQuery(input.String())
 
 		switch ev := ev.(type) {
 		case vaxis.Key:
@@ -371,9 +403,11 @@ func main() {
 				if ev.String() == "Shift+Left" {
 					dir = -1
 				}
-				cur := selectName
-				if left, _, ok := strings.Cut(filterQuery, " "); ok && len(triggersPrefix[left]) > 0 {
-					cur = triggersPrefix[left][0]
+				var cur string
+				if len(sel.picked) > 0 {
+					cur = sel.picked[0]
+				} else if sc, _, ok := active(); ok {
+					cur = sc.Name
 				}
 				setQuery(selectPrefix + cycleScript(scriptOrder, cur, dir) + " ")
 			case "Shift+Down":
@@ -389,11 +423,13 @@ func main() {
 			case "Page_Up":
 				index = max(index-rows+1, 0)
 			case "Ctrl+r":
-				sc, _, ok := active()
-				if !ok {
+				if sc, _, ok := active(); ok {
+					requestLoad(sc, inputFor(sc.Name))
 					break
 				}
-				requestLoad(sc, inputFor(sc.Name))
+				for _, scriptName := range sel.scripts {
+					requestLoad(scripts[scriptName], inputFor(scriptName))
+				}
 			case "Enter", "Shift+Enter":
 				execute(ev.Modifiers&vaxis.ModShift != 0)
 			}
@@ -443,12 +479,12 @@ func main() {
 			case !ev.stay:
 				return
 			default:
-				for _, scriptName := range selectedScripts {
+				for _, scriptName := range sel.scripts {
 					requestLoad(scripts[scriptName], inputFor(scriptName))
 				}
 			}
 		case eventInterval:
-			if !ev.sc.lastLoaded.IsZero() && slices.Contains(selectedScripts, ev.sc.Name) {
+			if !ev.sc.lastLoaded.IsZero() && slices.Contains(sel.scripts, ev.sc.Name) {
 				send(ev.sc.loads, loadReq{input: ev.sc.sentInput, quiet: true})
 			}
 		case vaxis.SyncFunc:
@@ -457,43 +493,14 @@ func main() {
 			imgState.settle()
 		}
 
-		lastSelected := selectedScripts
-		selectedScripts = nil
-		clear(pickedScripts)
-
-		// pickScripts adds scripts plus everything they trigger
-		pickScripts := func(scriptNames ...string) {
-			selectedScripts = append(selectedScripts, scriptNames...)
-			for _, scriptName := range scriptNames {
-				pickedScripts[scriptName] = struct{}{}
-				selectedScripts = append(selectedScripts, triggersScript[scriptName]...)
-			}
-		}
-
-		pickedPrefix = ""
-		left, after, hasPrefix := strings.Cut(filterQuery, " ")
-		switch scriptNames := triggersPrefix[left]; {
-		case selected:
-			if scripts[selectName] != nil {
-				pickScripts(selectName)
-				pickedPrefix = selectPrefix + selectName + " "
-			}
-		case hasPrefix && len(scriptNames) > 0:
-			filterQuery = after
-			pickScripts(scriptNames...)
-			pickedPrefix = left + " "
-		default:
-			selectedScripts = append(selectedScripts, triggersOnStart...)
-		}
-
 		for _, scriptName := range lastSelected {
-			if !slices.Contains(selectedScripts, scriptName) {
+			if !slices.Contains(sel.scripts, scriptName) {
 				cancelLoad(scripts[scriptName])
 			}
 		}
 
 		// invoke scripts that haven't been asked for this input yet, the worker debounces reloads
-		for _, scriptName := range selectedScripts {
+		for _, scriptName := range sel.scripts {
 			script := scripts[scriptName]
 			if script.sentInputSet && script.sentInput == inputFor(scriptName) {
 				continue
@@ -507,13 +514,13 @@ func main() {
 			visLines = visLines[:0]
 			visScripts = nil
 
-			for _, scriptName := range selectedScripts {
+			for _, scriptName := range sel.scripts {
 				script := scripts[scriptName]
 
 				var scriptVisible bool
 				for _, it := range script.lines {
 					// a query is looking for something to run, and labels are never that
-					if filterQuery != "" && (it.marks.label || !matches(it.display, filterQuery, fuzz)) {
+					if sel.filter != "" && (it.marks.label || !matches(it.display, sel.filter, fuzz)) {
 						continue
 					}
 					visLines = append(visLines, line{script: scriptName, item: it})
@@ -651,7 +658,7 @@ func main() {
 		if sc, _, ok := active(); ok {
 			activeName = sc.Name
 		}
-		drawFooter(footerWin, conf, visScripts, activeName)
+		drawFooter(footerWin, conf, sel.scripts, visScripts, sel.picked, activeName)
 
 		vx.Render()
 	}
@@ -1208,7 +1215,7 @@ func styledSegments(vx *vaxis.Vaxis, s string) []vaxis.Segment {
 	return segs
 }
 
-func drawFooter(win vaxis.Window, conf config, visScripts []string, activeName string) {
+func drawFooter(win vaxis.Window, conf config, selectedScripts, visScripts, pickedScripts []string, activeName string) {
 	footSegs := make([]vaxis.Segment, 0, len(conf.Scripts)*2)
 	footSegs = append(footSegs, vaxis.Segment{Text: "# ", Style: vaxis.Style{Attribute: vaxis.AttrDim}})
 
@@ -1216,12 +1223,15 @@ func drawFooter(win vaxis.Window, conf config, visScripts []string, activeName s
 		if len(footSegs) > 1 {
 			footSegs = append(footSegs, vaxis.Segment{Text: " "})
 		}
-		var style = vaxis.Style{Attribute: vaxis.AttrDim}
-		if slices.Contains(visScripts, sconf.Name) {
-			style = vaxis.Style{UnderlineStyle: vaxis.UnderlineSingle}
+		var style vaxis.Style
+		if !slices.Contains(selectedScripts, sconf.Name) {
+			style.Attribute |= vaxis.AttrDim
 		}
-		if sconf.Name == activeName {
+		if slices.Contains(pickedScripts, sconf.Name) || sconf.Name == activeName {
 			style.Attribute |= vaxis.AttrBold
+		}
+		if slices.Contains(visScripts, sconf.Name) {
+			style.UnderlineStyle = vaxis.UnderlineSingle
 		}
 		footSegs = append(footSegs, vaxis.Segment{Text: sconf.Name, Style: style})
 	}
