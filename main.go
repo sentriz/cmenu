@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding"
 	"encoding/base64"
 	"fmt"
 	"image"
@@ -114,7 +115,7 @@ func main() {
 	var scripts = map[string]*script{}
 	var scriptOrder = make([]string, 0, len(conf.Scripts))
 	for _, sconf := range conf.Scripts {
-		sc := &script{scriptConf: sconf, run: sconf, debounce: debounceDur(sconf.Debounce)}
+		sc := &script{scriptConf: sconf, run: sconf}
 		scripts[sconf.Name] = sc
 		scriptOrder = append(scriptOrder, sconf.Name)
 	}
@@ -127,22 +128,15 @@ func main() {
 	)
 	for _, sconf := range conf.Scripts {
 		for _, trigger := range sconf.Triggers {
-			switch typ, value, _ := strings.Cut(trigger, " "); typ {
+			switch trigger.kind {
 			case "on-start":
 				triggersOnStart = append(triggersOnStart, sconf.Name)
 			case "pre":
-				triggersPrefix[value] = append(triggersPrefix[value], sconf.Name)
+				triggersPrefix[trigger.value] = append(triggersPrefix[trigger.value], sconf.Name)
 			case "script":
-				triggersScript[value] = append(triggersScript[value], sconf.Name)
+				triggersScript[trigger.value] = append(triggersScript[trigger.value], sconf.Name)
 			case "interval":
-				triggersInterval[sconf.Name], err = time.ParseDuration(value)
-				if err != nil {
-					quitErr = fmt.Errorf("parse %q: parse duration: %w", sconf.Name, err)
-					return
-				}
-			default:
-				quitErr = fmt.Errorf("parse %q: unknown trigger type %q", sconf.Name, typ)
-				return
+				triggersInterval[sconf.Name] = trigger.interval
 			}
 		}
 	}
@@ -468,7 +462,6 @@ func main() {
 		case eventLines:
 			if len(ev.lines) > 0 {
 				ev.sc.lines, ev.sc.run = ev.lines, ev.conf
-				ev.sc.debounce = debounceDur(ev.conf.Debounce)
 			}
 			ev.sc.lastLoaded = time.Now()
 		case eventPreview:
@@ -509,7 +502,7 @@ func main() {
 			}
 			var wait time.Duration
 			if script.sentInputSet {
-				wait = script.debounce
+				wait = cmp.Or(time.Duration(script.run.Debounce), defaultDebounce)
 			}
 			requestLoad(script, inputFor(scriptName), wait, spinnerDelay)
 		}
@@ -709,42 +702,85 @@ const (
 // Fields with a key tag are what a script can say about itself with `cmenu set`, each
 // time it runs. The rest cmenu needs before it can run anything
 type scriptConf struct {
-	Triggers  []string `toml:"triggers"`
-	Name      string   `toml:"name"`
-	Path      string   `toml:"path"`
-	Debounce  string   `toml:"debounce" key:"debounce"`
-	Colour    int      `toml:"colour" key:"colour"`
-	Wrap      bool     `toml:"wrap" key:"wrap"`
-	StayOpen  bool     `toml:"stay_open" key:"stay_open"`
-	Preview   bool     `toml:"preview" key:"preview"`
-	Hide      string   `toml:"hide" key:"hide"`
-	Delimiter string   `toml:"delimiter" key:"delimiter"`
-}
-
-func debounceDur(spec string) time.Duration {
-	if dur, err := time.ParseDuration(spec); err == nil {
-		return dur
-	}
-	return defaultDebounce
+	Triggers  []trigger `toml:"triggers"`
+	Name      string    `toml:"name"`
+	Path      string    `toml:"path"`
+	Debounce  debounce  `toml:"debounce" key:"debounce"`
+	Colour    colour    `toml:"colour" key:"colour"`
+	Wrap      bool      `toml:"wrap" key:"wrap"`
+	StayOpen  bool      `toml:"stay_open" key:"stay_open"`
+	Preview   bool      `toml:"preview" key:"preview"`
+	Hide      columns   `toml:"hide" key:"hide"`
+	Delimiter string    `toml:"delimiter" key:"delimiter"`
 }
 
 func parseConfig(path string) (config, error) {
-	configFile, err := os.Open(path)
-	if err != nil {
-		return config{}, err
-	}
-
 	var conf config
-	if _, err := toml.NewDecoder(configFile).Decode(&conf); err != nil {
+	if _, err := toml.DecodeFile(path, &conf); err != nil {
 		return config{}, err
 	}
-
 	return conf, nil
+}
+
+type trigger struct {
+	kind     string
+	value    string
+	interval time.Duration
+}
+
+func (t *trigger) UnmarshalText(text []byte) error {
+	t.kind, t.value, _ = strings.Cut(string(text), " ")
+	switch t.kind {
+	case "on-start", "pre", "script":
+		return nil
+	case "interval":
+		var err error
+		t.interval, err = time.ParseDuration(t.value)
+		return err
+	default:
+		return fmt.Errorf("unknown trigger type %q", t.kind)
+	}
+}
+
+type debounce time.Duration
+
+func (d *debounce) UnmarshalText(text []byte) error {
+	dur, err := time.ParseDuration(string(text))
+	*d = debounce(dur)
+	return err
+}
+
+type colour uint8
+
+func (c *colour) UnmarshalText(text []byte) error {
+	n, err := strconv.ParseUint(string(text), 10, 8)
+	*c = colour(n)
+	return err
+}
+
+// columns is a comma separated column list, like 2 or 2,5
+type columns []int
+
+func (cs *columns) UnmarshalText(text []byte) error {
+	*cs = nil
+	if len(text) == 0 {
+		return nil
+	}
+	for part := range strings.SplitSeq(string(text), ",") {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return fmt.Errorf("parse column %q: %w", part, err)
+		}
+		if n < 1 {
+			return fmt.Errorf("column %q is not positive", part)
+		}
+		*cs = append(*cs, n)
+	}
+	return nil
 }
 
 type script struct {
 	scriptConf
-	debounce time.Duration
 	loads    chan loadReq
 	previews chan previewReq
 
@@ -1008,8 +1044,6 @@ func parseItems(raw []string, conf scriptConf) ([]item, scriptConf) {
 	items := make([]item, 0, len(raw))
 	columns := make([][]string, 0, len(raw))
 
-	hidden, _ := parseColumns(conf.Hide)
-
 	for _, r := range raw {
 		var isSet bool
 		for {
@@ -1024,7 +1058,6 @@ func parseItems(raw []string, conf scriptConf) ([]item, scriptConf) {
 				continue
 			}
 			conf = next
-			hidden, _ = parseColumns(conf.Hide)
 		}
 		if isSet && r == "" {
 			continue
@@ -1033,10 +1066,9 @@ func parseItems(raw []string, conf scriptConf) ([]item, scriptConf) {
 		text, marks := parseLine(r)
 		items = append(items, item{text: text, marks: marks})
 
-		delim := cmp.Or(conf.Delimiter, defaultDelimiter)
 		var shown []string
-		for c, col := range strings.Split(text, delim) {
-			if !slices.Contains(hidden, c+1) {
+		for c, col := range strings.Split(text, cmp.Or(conf.Delimiter, defaultDelimiter)) {
+			if !slices.Contains(conf.Hide, c+1) {
 				shown = append(shown, col)
 			}
 		}
@@ -1521,6 +1553,12 @@ func applySet(conf scriptConf, payload string) (scriptConf, error) {
 		if !field.IsValid() {
 			return conf, fmt.Errorf("set %q: no such key", key)
 		}
+		if u, ok := field.Addr().Interface().(encoding.TextUnmarshaler); ok {
+			if err := u.UnmarshalText([]byte(value)); err != nil {
+				return conf, fmt.Errorf("set %s: %w", key, err)
+			}
+			continue
+		}
 		switch field.Kind() {
 		case reflect.Bool:
 			b, err := strconv.ParseBool(value)
@@ -1528,43 +1566,11 @@ func applySet(conf scriptConf, payload string) (scriptConf, error) {
 				return conf, fmt.Errorf("set %s: %w", key, err)
 			}
 			field.SetBool(b)
-		case reflect.Int:
-			i, err := strconv.Atoi(value)
-			if err != nil {
-				return conf, fmt.Errorf("set %s: %w", key, err)
-			}
-			field.SetInt(int64(i))
 		default:
 			field.SetString(value)
 		}
 	}
-	if conf.Hide != "" {
-		if _, err := parseColumns(conf.Hide); err != nil {
-			return conf, err
-		}
-	}
-	if conf.Debounce != "" {
-		if _, err := time.ParseDuration(conf.Debounce); err != nil {
-			return conf, err
-		}
-	}
 	return conf, nil
-}
-
-// parseColumns reads a comma separated column list, like 2 or 2,5
-func parseColumns(spec string) ([]int, error) {
-	var cols []int
-	for part := range strings.SplitSeq(spec, ",") {
-		n, err := strconv.Atoi(part)
-		if err != nil {
-			return nil, fmt.Errorf("parse column %q: %w", part, err)
-		}
-		if n < 1 {
-			return nil, fmt.Errorf("column %q is not positive", part)
-		}
-		cols = append(cols, n)
-	}
-	return cols, nil
 }
 
 func clamp[T cmp.Ordered](v, mn, mx T) T {
